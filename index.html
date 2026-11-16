@@ -15,13 +15,14 @@
   /* Cursor pill: the link itself, carried under the pointer */
   #pill {
     position: fixed; left: 0; top: 0; z-index: 3;
-    display: inline-flex; align-items: center; height: 36px; padding: 0 16px;
+    display: inline-flex; align-items: center; gap: 5px; height: 36px; padding: 0 13px 0 16px;
     border-radius: 999px; border: 1px solid transparent; background: var(--ink); color: var(--paper);
     text-decoration: none; white-space: nowrap; line-height: 1;
     box-shadow: 0 0 0 1.5px var(--paper), 0 6px 18px rgba(0, 0, 0, .22);
     translate: calc(var(--x, 50vw) - 50%) calc(var(--y, var(--dock, 70vh)) - 50%);
     user-select: none; -webkit-user-select: none; -webkit-tap-highlight-color: transparent;
   }
+  #pill svg { flex: none; width: 14px; height: 14px; }
   #pill.press, #pill:active { scale: .96; }
   #pill.away { opacity: 0; scale: .96; pointer-events: none; }
   #pill:focus-visible { outline: 2px solid var(--ink); outline-offset: 4px; }
@@ -57,17 +58,23 @@
     translate: calc(var(--cx, 0px) - 50%) calc(var(--cy, 22px) - 50%); }
   #thumb.fut { width: 28px; height: 28px; border-radius: 8px; }
   .ends { display: flex; justify-content: space-between; gap: 12px; margin-top: -4px; font-size: 11px; opacity: .7; }
-  /* Narrow screens: a vertical rail on the right, with the caption riding beside the marker */
+  /* Narrow screens: a compact dial on the right. The stops scroll through a fixed selection band, and the caption sits beside it. */
   @media (max-width: 599px) {
-    #timeline { left: auto; right: 10px; bottom: auto; top: 50%; translate: 0 -50%; width: 52px; padding: 6px 4px; }
-    .stops { flex-direction: column; flex-wrap: nowrap; margin: 0; }
-    .stop { flex: none; width: 44px; height: clamp(24px, calc((100dvh - 150px) / 14), 34px); }
-    .stop::before { width: calc(10px + 12px * var(--g, 0)); height: 2px; }
-    #thumb { width: 24px; height: 6px; }
-    .ends { display: none; }
-    .cap { position: absolute; right: calc(100% + 8px); top: 6px; translate: 0 calc(var(--cy, 0px) - 50%); min-height: 0;
+    #timeline { --dial: min(148px, calc(100dvh - 24px)); left: auto; right: 10px; bottom: auto; top: 50%; translate: 0 -50%; width: 52px; height: var(--dial); padding: 0 4px; }
+    #timeline::before { content: ""; position: absolute; left: 4px; right: 4px; top: 50%; height: 28px; translate: 0 -50%; border-radius: 8px;
+      background: color-mix(in srgb, var(--ink) 10%, transparent); pointer-events: none; }
+    .stops { flex-direction: column; flex-wrap: nowrap; margin: 0; height: 100%; padding-block: calc((var(--dial) - 28px) / 2);
+      overflow-y: auto; overscroll-behavior: contain; scroll-snap-type: y mandatory; scrollbar-width: none; touch-action: pan-y;
+      -webkit-mask-image: linear-gradient(transparent, #000 30%, #000 70%, transparent); mask-image: linear-gradient(transparent, #000 30%, #000 70%, transparent); }
+    .stops::-webkit-scrollbar { display: none; }
+    .stop { flex: none; width: 44px; height: 28px; scroll-snap-align: center; scale: calc(.72 + .28 * var(--g, 0)); }
+    .stop::before, .stop[aria-checked="true"]::before { width: calc(8px + 16px * var(--g, 0)); height: 2px; opacity: calc(.25 + .75 * var(--g, 0)); transition: none; }
+    .stop.fut[aria-checked="true"]::before { opacity: 0; }
+    .stop svg { color: currentColor; }
+    #thumb, .ends { display: none; }
+    .cap { position: absolute; right: calc(100% + 8px); top: 50%; translate: 0 -50%; min-height: 0;
       flex-direction: column; align-items: flex-end; gap: 2px; padding: 7px 10px; border-radius: 10px; border: 1px solid transparent; background: var(--paper); white-space: nowrap;
-      box-shadow: 0 0 0 1px color-mix(in srgb, var(--ink) 14%, transparent), 0 6px 18px rgba(0, 0, 0, .16); }
+      box-shadow: 0 0 0 1px color-mix(in srgb, var(--ink) 14%, transparent), 0 6px 18px rgba(0, 0, 0, .16); transition: none; }
     #cap-name { font-size: 12px; }
   }
 
@@ -97,7 +104,7 @@
 </head>
 <body>
 <canvas id="c" role="img" aria-label="Portrait of Adán Vivas. His eyes follow the cursor. The timeline redraws the portrait in the style of each era."></canvas>
-<a id="pill" href="https://cal.com/adanvivas/intro-call" target="_blank" rel="noopener">Talk to me</a>
+<a id="pill" href="https://cal.com/adanvivas/intro-call" target="_blank" rel="noopener">Talk to me<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 17 17 7"/><path d="M8 7h9v9"/></svg><span class="sr"> (opens in a new tab)</span></a>
 <canvas id="hand" width="96" height="96" aria-hidden="true"></canvas>
 <nav id="timeline" aria-label="Timeline">
   <div class="cap"><span id="cap-era">2026</span><span id="cap-name">Dither</span></div>
@@ -691,6 +698,7 @@
     trail = [makeTarget(), makeTarget()];
     document.documentElement.style.setProperty('--dock', (innerWidth < 600 ? innerHeight - 48 : timeline.getBoundingClientRect().top - 30) + 'px');
     placeThumb(true);
+    if (isDial()) dialSync(false); else radios.forEach(b => b.style.removeProperty('--g'));
   }
 
   // ---------- Timeline ----------
@@ -698,6 +706,25 @@
   const DUR = 360;
   const keyOf = (i, fut) => i === FUT ? FUT + fut : i;
   const radios = []; let spins = 0;
+  // Dial mode (narrow screens): the stops are a native snap-scroller, so flicks, momentum and edge bounce come from the platform.
+  const ROW = 28, isDial = () => innerWidth < 600;
+  let dialTarget = null, dialFrom = NOW, dialRaf = 0, dialEnd = 0;
+  function dialPaint() { const pos = stops.scrollTop / ROW; radios.forEach((b, i) => b.style.setProperty('--g', Math.exp(-((i - pos) ** 2) / 1.1).toFixed(3))); }
+  function dialSync(smooth) { stops.scrollTo({ top: era.i * ROW, behavior: smooth ? 'smooth' : 'auto' }); if (!smooth) dialPaint(); }
+  stops.addEventListener('scroll', () => {
+    if (!isDial()) return;
+    cancelAnimationFrame(dialRaf); dialRaf = requestAnimationFrame(() => {
+      dialPaint();
+      const idx = Math.max(0, Math.min(ERAS.length - 1, Math.round(stops.scrollTop / ROW)));
+      if (dialTarget != null) { if (idx === dialTarget) dialTarget = null; }      // a tap or key is carrying the dial; do not pick up the stops it passes
+      else if (idx !== era.i) { tick(); setEra(idx, { fromDial: true }); }
+    });
+    clearTimeout(dialEnd); dialEnd = setTimeout(() => {                             // settled: one swoosh for the whole spin
+      dialTarget = null;
+      if (era.i !== dialFrom) { swoosh(era.i > dialFrom ? 1 : -1); dialFrom = era.i; }
+    }, 160);
+  }, { passive: true });
+  ['pointerdown', 'touchstart', 'wheel'].forEach(ev => stops.addEventListener(ev, () => { dialTarget = null; }, { passive: true }));
   // A short filtered-noise swoosh, rising when you move forward in time and falling when you go back.
   let ac;
   function swoosh(dir) {
@@ -737,6 +764,7 @@
     live.textContent = `${ERAS[i].label}, ${i === FUT ? FUTURES[fut].name : ERAS[i].name}`;
     radios.forEach((b, j) => { b.setAttribute('aria-checked', j === i); b.tabIndex = j === i ? 0 : -1; });
     placeThumb(opt.instant || reduce);
+    if (isDial() && !opt.fromDial) { dialTarget = i; dialFrom = i; dialSync(!(opt.instant || reduce)); }
   }
   ERAS.forEach((e, i) => {
     const b = document.createElement('button'); b.type = 'button'; b.className = 'stop';
@@ -846,7 +874,7 @@
     }
     hand.classList.add('on');
   }
-  function swell(x, y) { radios.forEach(b => { const r = b.getBoundingClientRect(), d = Math.hypot(x - (r.left + r.width / 2), y - (r.top + r.height / 2)); b.style.setProperty('--g', Math.exp(-d * d / 1500).toFixed(3)); }); }
+  function swell(x, y) { if (isDial()) return; radios.forEach(b => { const r = b.getBoundingClientRect(), d = Math.hypot(x - (r.left + r.width / 2), y - (r.top + r.height / 2)); b.style.setProperty('--g', Math.exp(-d * d / 1500).toFixed(3)); }); }
   function hideHand() { if (glyphShown < 0) return; hand.classList.remove('on', 'swap', 'press'); glyphShown = -1; caption(era.i, era.fut); }
   function stopAt(x, y) { let best = 0, bd = 1e9; radios.forEach((b, i) => { const r = b.getBoundingClientRect(); const d = Math.hypot(x - (r.left + r.width / 2), y - (r.top + r.height / 2)); if (d < bd) { bd = d; best = i; } }); return best; }
 
