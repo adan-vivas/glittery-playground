@@ -48,9 +48,9 @@
     display: grid; place-items: center; -webkit-tap-highlight-color: transparent;
   }
   .stop::before { content: ""; width: 2px; height: calc(10px + 12px * var(--g, 0)); border-radius: 1px; background: currentColor; opacity: calc(.55 + .45 * var(--g, 0)); }
-  .stop.fut::before { display: none; }
-  .stop svg { position: relative; width: 16px; height: 16px; opacity: .8; scale: calc(1 + .2 * var(--g, 0)); }
-  .stop.fut[aria-checked="true"] svg { color: var(--paper); opacity: 1; }
+  /* Plausible futures: a line like the others. Once selected, the line becomes the shuffle icon. */
+  .stop svg { position: absolute; inset: 0; margin: auto; width: 16px; height: 16px; color: var(--paper); opacity: 0; scale: .25; filter: blur(4px); }
+  .stop.fut[aria-checked="true"] svg { opacity: 1; scale: 1; filter: none; }
   .stop[aria-checked="true"]::before { opacity: 0; }
   .stop:focus-visible { outline: 2px solid currentColor; outline-offset: -2px; }
   #thumb { position: absolute; left: 0; top: 0; width: 6px; height: 24px; border-radius: 3px; background: currentColor; pointer-events: none;
@@ -83,8 +83,8 @@
     #thumb { transition: translate 240ms var(--move), width 200ms var(--out), height 200ms var(--out), border-radius 200ms var(--out); }
     #thumb.jump { transition: none; }
     .stop::before { transition: height 140ms var(--out), width 140ms var(--out); }
-    .stop svg { transition: rotate 280ms var(--out), scale 140ms var(--out); }
-    .stop:active svg { scale: .92; }
+    .stop svg { transition: rotate 280ms var(--out), opacity 300ms cubic-bezier(.2, 0, 0, 1), scale 300ms cubic-bezier(.2, 0, 0, 1), filter 300ms cubic-bezier(.2, 0, 0, 1); }
+    .stop.fut[aria-checked="true"]:active svg { scale: .92; }
     .cap { transition: translate 240ms var(--move); }
     .cap.pop > span { animation: pop 200ms var(--out) both; }
     .cap.pop > #cap-name { animation-delay: 40ms; }
@@ -765,8 +765,10 @@
       o.connect(g); g.connect(ac.destination); o.start(t); o.stop(t + .05); window.__ticks = (window.__ticks || 0) + 1;
     } catch (e) {}
   }
-  const unlock = () => { try { ac = ac || new (window.AudioContext || window.webkitAudioContext)(); if (ac.state === 'suspended') ac.resume(); } catch (e) {} };
-  addEventListener('pointerdown', unlock, { passive: true }); addEventListener('keydown', unlock);
+  // Browsers keep audio locked until the visitor clicks, taps or presses a key. Ask on every input, so it wakes at the first moment the browser allows.
+  const unlock = () => { try { ac = ac || new (window.AudioContext || window.webkitAudioContext)(); if (ac.state !== 'running') ac.resume().catch(() => {}); } catch (e) {} };
+  ['pointerdown', 'pointerup', 'click', 'touchend', 'keydown', 'pointermove', 'wheel'].forEach(ev => addEventListener(ev, unlock, { passive: true, capture: true }));
+  unlock();
 
   // ---------- Era cursors: a different object per era, shown over the timeline ----------
   const P = d => new Path2D(d);
@@ -840,7 +842,7 @@
       if (!glyphCache[i]) { const cv = document.createElement('canvas'); cv.width = cv.height = 96; const c = cv.getContext('2d'); c.scale(4, 4); c.lineJoin = c.lineCap = 'round'; glyphs[i](c); glyphCache[i] = cv; }
       const h = hand.getContext('2d'); h.clearRect(0, 0, 96, 96); h.drawImage(glyphCache[i], 0, 0);
       if (glyphShown >= 0 && hand.classList.contains('on')) { hand.classList.remove('swap'); void hand.offsetWidth; hand.classList.add('swap'); }
-      glyphShown = i; tick(); caption(i, era.fut); if (i === FUT) capName.textContent = 'Click to shuffle';
+      glyphShown = i; tick(); caption(i, era.fut); if (i === FUT) capName.textContent = era.i === FUT ? 'Click to shuffle' : 'One of four, at random';
     }
     hand.classList.add('on');
   }
