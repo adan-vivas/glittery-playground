@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" class="pre">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -86,6 +86,8 @@
 
   @media (hover: hover) and (pointer: fine) {
     html, body, #c, #pill { cursor: none; }
+    .stop:hover::before { height: 20px; opacity: 1; }
+    .stop:hover:active::before { scale: .8; }
     #timeline { cursor: default; }
     .stop { cursor: pointer; }
   }
@@ -97,7 +99,7 @@
     #hand.swap { animation: swap 160ms var(--out); }
     #thumb { transition: translate 240ms var(--move), width 200ms var(--out), height 200ms var(--out), border-radius 200ms var(--out); }
     #thumb.jump { transition: none; }
-    .stop::before { transition: height 140ms var(--out), width 140ms var(--out); }
+    .stop::before { transition: height 140ms var(--out), width 140ms var(--out), scale 120ms var(--out); }
     .stop svg { transition: rotate 280ms var(--out), opacity 300ms cubic-bezier(.2, 0, 0, 1), scale 300ms cubic-bezier(.2, 0, 0, 1), filter 300ms cubic-bezier(.2, 0, 0, 1); }
     .stop.fut[aria-checked="true"]:active svg { scale: .92; }
     .cap { transition: translate 240ms var(--move); }
@@ -108,7 +110,25 @@
   }
   @media (prefers-reduced-motion: reduce) { #pill, #hand { transition: opacity 120ms linear; } }
   noscript img { position: fixed; bottom: 0; left: 50%; height: 100%; transform: translateX(-50%); }
+  @media (max-width: 599px) { #timeline, .cap { background: rgba(244, 244, 250, .96); } }
+  /* Staged entrance, once per visit: the timeline settles in, then the pill. Hidden until the portrait is ready. */
+  .pre #timeline, .pre #pill { opacity: 0; }
+  @media (prefers-reduced-motion: no-preference) {
+    .pre #timeline { translate: -50% 12px; filter: blur(4px); }
+    .pre #pill { scale: .96; }
+    .enter #timeline { transition: opacity 300ms var(--out), translate 300ms var(--out), filter 300ms var(--out); }
+    .enter #pill { transition: opacity 300ms var(--out) 100ms, scale 300ms var(--out) 100ms; }
+    #pill.follow.catch { transition: translate 220ms var(--out), scale 150ms var(--out), opacity 100ms var(--out); }   /* dock to cursor, instead of a jump */
+    #pill svg { transition: translate 150ms var(--out); }
+    .ends span { transition: opacity 150ms var(--out); }
+  }
+  @media (prefers-reduced-motion: no-preference) and (max-width: 599px) { .pre #timeline { translate: 12px -50%; } }
+  @media (prefers-reduced-motion: reduce) { .enter #timeline, .enter #pill { transition: opacity 200ms linear; } }
+  #pill.press svg, #pill:active svg { translate: 1.5px -1.5px; }                 /* the arrow leans toward where the link goes */
+  .stop:active::before { scale: .8; }                                            /* press feedback on a line */
+  .ends { opacity: 1; } .ends span { opacity: .62; } .ends span.on { opacity: 1; }   /* the selected year reads without the marker */
 </style>
+<noscript><style>.pre #pill { opacity: 1; scale: 1; }</style></noscript>
 </head>
 <body>
 <canvas id="c" role="img" aria-label="A dithered timeline of Adán Vivas: the beginning in 1996, a happy child in 2006, a bookworm in 2016, today, and three plausible futures for 2036."></canvas>
@@ -146,7 +166,7 @@
   const canvas = $('c'), pill = $('pill'), timeline = $('timeline'), stops = $('stops'), thumb = $('thumb'), hand = $('hand');
   const capEra = $('cap-era'), capName = $('cap-name'), cap = document.querySelector('.cap'), live = $('live');
   const gl = canvas.getContext('webgl', { antialias: false, alpha: false, powerPreference: 'high-performance' });
-  if (!gl) { canvas.style.background = `center bottom / auto 100% no-repeat url(${SRC.gray})`; timeline.hidden = true; return; }
+  if (!gl) { canvas.style.background = `center bottom / auto 100% no-repeat url(${SRC.gray})`; timeline.hidden = true; document.documentElement.classList.remove('pre'); return; }
 
   const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
   const fine = matchMedia('(hover: hover) and (pointer: fine)').matches;
@@ -330,6 +350,7 @@
   const DUR = 360;
   const keyOf = (i, fut) => i === FUT ? FUT + fut : i;
   const radios = []; let spins = 0;
+  const yearLabels = [...document.querySelectorAll('.ends span')]; yearLabels[NOW].classList.add('on');
   // Dial mode (narrow screens): the stops are a native snap-scroller, so flicks, momentum and edge bounce come from the platform.
   const ROW = 28, isDial = () => innerWidth < 600;
   let dialTarget = null, dialFrom = NOW, dialRaf = 0, dialEnd = 0;
@@ -382,7 +403,8 @@
     const theme = themeOf(key), root = document.documentElement.style;
     root.setProperty('--paper', theme.paper); root.setProperty('--ink', theme.ink);
     caption(i, fut);
-    if (!opt.instant && !reduce) { cap.classList.remove('pop'); void cap.offsetWidth; cap.classList.add('pop'); }
+    yearLabels.forEach((s, j) => s.classList.toggle('on', j === i));
+    if (!opt.instant && !reduce && !opt.fromDial) { cap.classList.remove('pop'); void cap.offsetWidth; cap.classList.add('pop'); }
     if (i === FUT) radios[FUT].firstElementChild.style.rotate = (++spins * 180) + 'deg';
     if (opt.sound) swoosh(key > era.from ? 1 : -1);
     live.textContent = `${ERAS[i].label}, ${i === FUT ? FUTURES[fut].name : ERAS[i].name}`;
@@ -456,13 +478,13 @@
     }
     hand.classList.add('on');
   }
-  function swell(x, y) { if (isDial()) return; radios.forEach(b => { const r = b.getBoundingClientRect(), d = Math.hypot(x - (r.left + r.width / 2), y - (r.top + r.height / 2)); b.style.setProperty('--g', Math.exp(-d * d / 1500).toFixed(3)); }); }
+  function swell() {}
   function hideHand() { if (glyphShown < 0) return; hand.classList.remove('on', 'swap', 'press'); glyphShown = -1; caption(era.i, era.fut); }
   function stopAt(x, y) { let best = 0, bd = 1e9; radios.forEach((b, i) => { const r = b.getBoundingClientRect(); const d = Math.hypot(x - (r.left + r.width / 2), y - (r.top + r.height / 2)); if (d < bd) { bd = d; best = i; } }); return best; }
 
   // ---------- Pointer ----------
   const m = { x: -9999, y: -9999, px: -9999, py: -9999, inside: false, speed: 0 };
-  const gaze = { x: 0, y: 0 };
+  const gaze = { x: 0, y: 0 }; let catchT = 0;
   function setPill(x, y) { pill.style.setProperty('--x', x + 'px'); pill.style.setProperty('--y', y + 'px'); }
   function overTimeline(x, y) { const r = timeline.getBoundingClientRect(); return x > r.left - 8 && x < r.right + 8 && y > r.top - 8 && y < r.bottom + 8; }
   function onMove(e) {
@@ -470,6 +492,7 @@
     m.x = e.clientX; m.y = e.clientY; m.inside = true;
     if (fine && e.pointerType !== 'touch') {
       const over = overTimeline(m.x, m.y);
+      if (!pill.classList.contains('follow')) { pill.classList.add('catch'); clearTimeout(catchT); catchT = setTimeout(() => pill.classList.remove('catch'), 230); }
       pill.classList.add('follow'); pill.classList.toggle('away', over); setPill(m.x, m.y);
       hand.style.setProperty('--x', m.x + 'px'); hand.style.setProperty('--y', m.y + 'px');
       if (over) { showHand(stopAt(m.x, m.y)); swell(m.x, m.y); } else if (glyphShown >= 0) { hideHand(); swell(-1e4, -1e4); }
@@ -477,7 +500,7 @@
   }
   function onLeave() {
     m.inside = false; m.x = m.px = -9999; m.y = m.py = -9999;
-    pill.classList.remove('follow', 'press', 'away'); pill.style.removeProperty('--x'); pill.style.removeProperty('--y'); hideHand(); swell(-1e4, -1e4);
+    pill.classList.remove('follow', 'press', 'away', 'catch'); pill.style.removeProperty('--x'); pill.style.removeProperty('--y'); hideHand(); swell(-1e4, -1e4);
   }
   addEventListener('pointermove', onMove, { passive: true });
   addEventListener('pointerdown', e => { onMove(e); pill.classList.add('press'); hand.classList.add('press'); }, { passive: true });
@@ -550,12 +573,13 @@
   Promise.all(Object.values(SRC).map(load)).then(imgs => {
     const keys = Object.keys(SRC); tx = {}; imgs.forEach((im, i) => tx[keys[i]] = { t: tex(0, 0, im), w: im.naturalWidth, h: im.naturalHeight });
     prog(0); resize(); addEventListener('resize', resize);
+    const root = document.documentElement.classList; root.add('enter'); requestAnimationFrame(() => requestAnimationFrame(() => root.remove('pre'))); setTimeout(() => root.remove('enter'), 700);
     window.__ready = true; window.__setEra = setEra;
     requestAnimationFrame(frame);
     // Compile the other eras one at a time while idle, so the first visit to each does not hitch.
     let n = 0; const warm = () => { if (n < STYLES.length) { try { prog(n++); } catch (e) { console.error('era ' + (n - 1), e.message); } setTimeout(warm, 80); } else window.__warm = true; };
     setTimeout(warm, 300);
-  });
+  }).catch(() => document.documentElement.classList.remove('pre'));
 })();
 </script>
 </body>
