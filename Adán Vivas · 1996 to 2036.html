@@ -86,7 +86,7 @@
 
   @media (hover: hover) and (pointer: fine) {
     html, body, #c, #pill { cursor: none; }
-    .stop:hover::before { height: 20px; opacity: 1; }
+    @media (min-width: 600px) { .stop:hover::before { height: 20px; opacity: 1; } }   /* the bar only: in the dial a line is horizontal, and this made it a block */
     .stop:hover:active::before { scale: .8; }
     #timeline { cursor: default; }
     .stop { cursor: pointer; }
