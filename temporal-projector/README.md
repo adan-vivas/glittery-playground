@@ -3,8 +3,10 @@
 A speculative palm-sized device in the spirit of Dieter Rams. A dial jumps between
 1996, 2006, 2016, 2026 and the future; the orange key, **Plausible Random Futures**,
 jumps to the future and projects a plausible one. A small front lens projects the
-selected date onto the table. The lens on top will project images into the air
-(not built yet).
+selected date onto the table, and the lens on top projects a hologram into the air:
+a cone of light with a dithered image floating inside it. Power on and it rises out
+of the lens; turn the dial or press the key and it dissolves to the next picture.
+Without pictures it shows the year. The homepage (`../index.html`) gives it a portrait per era.
 
 ![Hero render](renders/zeitlinse_hero.jpg)
 
@@ -42,8 +44,23 @@ Then open <http://localhost:4317>.
 ```
 
 - **Attributes:** `date` (`1996` `2006` `2016` `2026` `FUTURE`), `power` (`on`/`off`), `zoom`, `muted`, `src`, `shadow`
-- **Events:** `datechange` → `{ date, projected }`, `powerchange` → `{ on }`
-- **Methods:** `setDate(label)`, `randomFuture()`, `togglePower()`
+- **Events:** `datechange` → `{ date, projected, label, future }`, `powerchange` → `{ on }`
+- **Methods:** `setDate(label)`, `randomFuture()`, `togglePower()`, `setContent({ dates, futures })`,
+  `anchor(part)` (screen position of `power`, `key`, `dial`, `lens` or `hologram`), `hologramHit(x, y)`
+
+Give the hologram pictures with `setContent`. Images are URLs (data URLs work). `sheet` plays a
+sprite sheet, `mask` cuts out a subject (its green channel), `focus` keeps a point in view, and
+`invert: false` makes bright pixels the dots. When `futures` is set, the orange key picks one of them.
+
+```js
+el.setContent({
+  dates: {
+    '2026': { image: 'now.jpg', mask: 'now-mask.png', label: 'Now' },
+    '1996': { image: 'sheet.jpg', sheet: [6, 4], fps: 25, label: 'The beginning' },
+  },
+  futures: [{ year: 2036, image: 'farm.jpg', label: 'A farm' }],
+});
+```
 - **Interaction:** drag or click the dial, press the orange key, press I/O; drag elsewhere to orbit.
   Keyboard: arrows turn the dial, Enter presses the key, P toggles power.
 

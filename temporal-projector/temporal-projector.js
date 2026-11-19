@@ -8,9 +8,11 @@
 //
 // Attributes: date (1996|2006|2016|2026|FUTURE), power (on|off), zoom (boolean), muted (boolean),
 //             src (GLB url), shadow (shadow PNG url)
-// Events:     "datechange"  detail { date, projected }
+// Events:     "datechange"  detail { date, projected, label, future }
 //             "powerchange" detail { on }
-// Methods:    setDate(label), randomFuture(), togglePower()
+// Methods:    setDate(label), randomFuture(), togglePower(),
+//             setContent({ dates, futures }) — pictures for the hologram (see the method),
+//             anchor(part) — client px of power|key|dial|lens|hologram, hologramHit(x, y)
 
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
@@ -31,6 +33,147 @@ const LED_P = new THREE.Vector3(0.010, TOP_Y + 0.0003, -0.0265);
 const FRONT_LENS_P = new THREE.Vector3(0.031, 0.011, 0.0362);
 const PROJ_P = new THREE.Vector3(0.030, 0.0002, 0.065);
 const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+// The hologram rises from the top lens: a cone of light, and a dithered image floating inside it.
+const HOLO = {
+  lens: new THREE.Vector3(-0.026, TOP_Y + 0.0006, -0.002),
+  r0: 0.0075,          // beam radius at the lens
+  r1: 0.036,           // beam radius at the top of the image
+  gap: 0.016,          // lens to the bottom of the image
+  w: 0.056, h: 0.074,  // image plane
+};
+HOLO.top = HOLO.gap + HOLO.h;
+// Colours are sRGB triplets written straight to the framebuffer: the hologram is light, not a lit surface.
+const HOLO_INK = new THREE.Vector3(0.11, 0.18, 1.0);       // the homepage's dither blue
+const HOLO_SIGNAL = new THREE.Vector3(1.0, 0.23, 0.055);   // FUTURE orange
+
+const GLSL_NOISE = `
+  float B2(vec2 a){ a = floor(a); return fract(a.x / 2. + a.y * a.y * .75); }
+  float B4(vec2 a){ return B2(.5 * a) * .25 + B2(a); }
+  float B8(vec2 a){ return B4(.5 * a) * .25 + B2(a); }
+  float hash(vec2 p){ p = fract(p * vec2(.1031, .1030)); p += dot(p, p.yx + 33.33); return fract((p.x + p.y) * p.x); }
+  float vnoise(vec2 p){ vec2 i = floor(p), f = fract(p); f = f * f * (3. - 2. * f);
+    return mix(mix(hash(i), hash(i + vec2(1., 0.)), f.x), mix(hash(i + vec2(0., 1.)), hash(i + vec2(1., 1.)), f.x), f.y); }`;
+
+const HOLO_IMAGE_VS = `
+  varying vec2 vUv;
+  void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.); }`;
+
+// Ordered dither in screen space, like the homepage portrait: every cell samples the image at its own centre,
+// so the dots stay crisp at any size. Two slots cross-dissolve cell by cell when the date changes.
+const HOLO_IMAGE_FS = `
+  uniform sampler2D uTexA, uTexB, uMaskA, uMaskB;
+  uniform vec4 uRectA, uRectB;
+  uniform vec3 uSheetA, uSheetB, uFlagA, uFlagB;   // sheet: cols, rows, frame. flag: invert, mask, future
+  uniform vec3 uLevelsA, uLevelsB;                 // black point, white point, gamma on the ink
+  uniform float uMix, uReveal, uTime, uScan, uCell, uGlitch, uAlpha;
+  uniform vec3 uInk, uSignal;
+  varying vec2 vUv;
+  ${GLSL_NOISE}
+  float tone(sampler2D tex, sampler2D mask, vec4 rect, vec3 sheet, vec3 fl, vec3 lv, vec2 uv){
+    vec2 st = clamp(rect.xy + vec2(uv.x, 1. - uv.y) * rect.zw, .002, .998), sv = st;
+    if (sheet.x > 1.5) { float f = floor(sheet.z); sv = (vec2(mod(f, sheet.x), floor(f / sheet.x)) + st) / sheet.xy; }
+    float l = clamp((texture2D(tex, sv).r - lv.x) / max(lv.y - lv.x, .01), 0., 1.);
+    float t = pow(fl.x > .5 ? 1. - l : l, lv.z);
+    if (fl.y > .5) t *= smoothstep(.3, .7, texture2D(mask, st).g);
+    return t;
+  }
+  void main(){
+    vec2 fc = gl_FragCoord.xy, id = floor(fc / uCell), cc = (id + .5) * uCell;
+    vec2 uv = vUv + dFdx(vUv) * (cc.x - fc.x) + dFdy(vUv) * (cc.y - fc.y);
+    float band = floor(uv.y * 30.), tg = floor(uTime * 16.);
+    uv.x += (hash(vec2(band, tg)) - .5) * .14 * uGlitch * step(.7, hash(vec2(band * 1.7, tg + 3.)));
+    if (uv.x < 0. || uv.x > 1. || uv.y < 0. || uv.y > 1.) discard;
+    float edge = (1. - smoothstep(.74, 1., length((uv - .5) * vec2(2., 1.86)))) * smoothstep(0., .2, uv.y);
+    float rv = uReveal * 1.12 - .06;
+    float below = smoothstep(rv + .015, rv - .03, uv.y);
+    bool useB = hash(id) * .45 + vnoise(id / 14.) * .55 < uMix * 1.1 - .05;
+    float t = useB ? tone(uTexB, uMaskB, uRectB, uSheetB, uFlagB, uLevelsB, uv) : tone(uTexA, uMaskA, uRectA, uSheetA, uFlagA, uLevelsA, uv);
+    float fut = useB ? uFlagB.z : uFlagA.z;
+    t *= edge * below;
+    float on = step(B8(id) * .94 + .04, t);
+    float d = 1. - smoothstep(.36, .5, length(fc - cc) / uCell);
+    float scan = uScan * (.5 + .5 * sin(uv.y * 190. - uTime * 7.));   // 0 = no scanline dimming
+    float screen = edge * below * .055;
+    float front = (1. - smoothstep(0., .018, abs(uv.y - rv))) * step(.002, uReveal) * step(uReveal, .998) * edge;
+    float a = max(on * d * (.95 - .25 * scan), screen * (1. - .5 * scan)) + front * .7;
+    gl_FragColor = vec4(mix(uInk, uSignal, fut), clamp(a, 0., 1.) * uAlpha);
+  }`;
+
+const HOLO_BEAM_VS = `
+  varying float vH, vFace, vAng;
+  void main(){
+    vH = uv.y; vAng = uv.x;
+    vec4 mv = modelViewMatrix * vec4(position, 1.);
+    vFace = abs(dot(normalize(normalMatrix * normal), normalize(-mv.xyz)));
+    gl_Position = projectionMatrix * mv;
+  }`;
+
+const HOLO_BEAM_FS = `
+  uniform float uGrow, uTime, uAlpha, uPulse;
+  uniform vec3 uCol;
+  varying float vH, vFace, vAng;
+  void main(){
+    if (vH > uGrow) discard;
+    float a6 = vAng * 6.2832;
+    float streak = .62 + .38 * sin(a6 * 11. + sin(a6 * 4. + uTime * .5) * 2.4 + vH * 3. - uTime * .9);
+    float body = pow(vFace, 1.6);
+    float fall = .25 + .75 * pow(1. - vH, 1.4);
+    float tip = smoothstep(uGrow, uGrow - .1, vH);
+    gl_FragColor = vec4(uCol, body * fall * streak * tip * (.15 + .22 * uPulse) * uAlpha);
+  }`;
+
+const HOLO_MOTES_VS = `
+  attribute vec3 aSeed;
+  uniform float uTime, uGrow, uH, uR0, uR1, uSize;
+  varying float vA;
+  void main(){
+    float y = fract(aSeed.z * 13.7 + aSeed.x * .31 + uTime * (.05 + aSeed.z * .09));
+    float r = mix(uR0, uR1, y) * aSeed.y;
+    float ang = aSeed.x + uTime * .25 * (aSeed.z - .5);
+    vec4 mv = modelViewMatrix * vec4(cos(ang) * r, y * uH, sin(ang) * r, 1.);
+    gl_Position = projectionMatrix * mv;
+    gl_PointSize = uSize * (.55 + aSeed.z * .9);
+    vA = smoothstep(0., .08, y) * smoothstep(1., .55, y) * step(y, uGrow);
+  }`;
+
+const HOLO_MOTES_FS = `
+  uniform vec3 uCol; uniform float uAlpha;
+  varying float vA;
+  void main(){
+    float d = length(gl_PointCoord - .5);
+    if (d > .5) discard;
+    gl_FragColor = vec4(uCol, vA * uAlpha * (1. - d * 2.) * .8);
+  }`;
+
+// Levels for an image, so a dark photo doesn't dither into a solid block: stretch the 2nd to 98th percentile,
+// then thin the ink until it covers about a third of the picture. Never thickens: gamma stays at 1 or above.
+function autoLevels(img, maskImg, invert) {
+  const S = 64, c = document.createElement('canvas');
+  c.width = c.height = S;
+  const g = c.getContext('2d', { willReadFrequently: true });
+  g.drawImage(img, 0, 0, S, S);
+  const px = g.getImageData(0, 0, S, S).data;
+  let mk = null;
+  if (maskImg) { g.clearRect(0, 0, S, S); g.drawImage(maskImg, 0, 0, S, S); mk = g.getImageData(0, 0, S, S).data; }
+  const lum = [];
+  for (let i = 0; i < px.length; i += 4) if (!mk || mk[i + 1] > 128) lum.push(px[i] / 255);
+  if (!lum.length) return new THREE.Vector3(0, 1, 1);
+  lum.sort((a, b) => a - b);
+  const lo = lum[Math.floor(lum.length * 0.02)], hi = Math.max(lum[Math.floor(lum.length * 0.98)], lo + 0.1);
+  let ink = 0;
+  for (const l of lum) { const n = THREE.MathUtils.clamp((l - lo) / (hi - lo), 0, 1); ink += invert ? 1 - n : n; }
+  ink /= lum.length;
+  const gamma = THREE.MathUtils.clamp(Math.log(0.34) / Math.log(Math.max(ink, 0.01)), 1, 3.5);
+  return new THREE.Vector3(lo, hi, gamma);
+}
+
+// Cover-fit one frame of an image into the hologram's aspect, keeping `focus` (image space, 0..1 from the top left) in view.
+function coverRect(iw, ih, focus = [0.5, 0.42]) {
+  const A = HOLO.w / HOLO.h, a = iw / ih;
+  if (a > A) { const w = A / a; return new THREE.Vector4(THREE.MathUtils.clamp(focus[0] - w / 2, 0, 1 - w), 0, w, 1); }
+  const h = a / A; return new THREE.Vector4(0, THREE.MathUtils.clamp(focus[1] - h / 2, 0, 1 - h), 1, h);
+}
 
 // ------------------------------------------------------------------ materials
 function makeMaterials() {
@@ -165,8 +308,15 @@ const TEMPLATE = `
             font: 500 11px/1 "Helvetica Neue", Helvetica, Arial, sans-serif; letter-spacing: .14em;
             color: rgba(0,0,0,.38); text-transform: uppercase; pointer-events: none; transition: opacity .4s; }
   :host([data-ready]) .status { opacity: 0; }
+  .caption { position: absolute; left: 0; top: 0; pointer-events: none; text-align: center; white-space: nowrap;
+             font-family: inherit; font-size: 13px; font-weight: 500; line-height: 1.25; color: rgb(28, 46, 255); opacity: 0;
+             translate: -50% -100%; will-change: transform, opacity; }
+  .caption b { display: block; font-weight: 600; font-size: 15px; letter-spacing: .04em; font-variant-numeric: tabular-nums; }
+  .caption span { display: block; max-width: 28ch; white-space: normal; text-wrap: balance; opacity: .8; }
+  .caption.future { color: rgb(255, 58, 14); }
 </style>
 <canvas part="canvas"></canvas>
+<div class="caption" part="caption" aria-hidden="true"><b></b><span></span></div>
 <div class="status">Loading</div>
 <div class="sr" aria-live="polite"></div>`;
 
@@ -178,8 +328,40 @@ class TemporalProjector extends HTMLElement {
     this.attachShadow({ mode: 'open' }).innerHTML = TEMPLATE;
     this.canvas = this.shadowRoot.querySelector('canvas');
     this.live = this.shadowRoot.querySelector('.sr');
+    this.caption = this.shadowRoot.querySelector('.caption');
     this.clicker = new Clicker();
-    this.state = { power: true, index: 3, projected: '2026' };
+    this.state = { power: true, index: 3, projected: '2026', label: '' };
+    this._content = { dates: {}, futures: [] };
+    this.futureIndex = null;
+  }
+
+  // What the hologram shows. Without content it projects the dithered year.
+  //   setContent({
+  //     dates:   { '2026': { image, mask, focus: [x, y], label }, '1996': { image, sheet: [cols, rows], fps, label } },
+  //     futures: [{ year: '2036', label, image, focus }],   // the orange key picks one of these
+  //   })
+  // image and mask are URLs (data: URLs work). Returns a promise that settles once every image has loaded.
+  setContent({ dates = {}, futures = [] } = {}) {
+    const loader = new THREE.TextureLoader();
+    const tex = (url) => loader.loadAsync(url).then((t) => {
+      t.flipY = false; t.colorSpace = THREE.NoColorSpace; t.generateMipmaps = false;
+      t.minFilter = t.magFilter = THREE.LinearFilter; t.needsUpdate = true; return t;
+    });
+    const prep = async (e) => {
+      const [t, m] = await Promise.all([tex(e.image), e.mask ? tex(e.mask) : null]);
+      const [cols, rows] = e.sheet || [1, 1];
+      Object.assign(e, { tex: t, maskTex: m, rect: coverRect(t.image.width / cols, t.image.height / rows, e.focus),
+        cols, rows, levels: autoLevels(t.image, m?.image, e.invert !== false), ready: true });
+      this._holoRefresh();
+    };
+    this._content = {
+      dates: Object.fromEntries(Object.entries(dates).map(([k, v]) => [k.toUpperCase(), { ...v }])),
+      futures: futures.map((f) => ({ ...f, year: String(f.year) })),
+    };
+    const all = [...Object.values(this._content.dates), ...this._content.futures].filter((e) => e.image);
+    if (this.state.index === 4 && this._content.futures.length && this.futureIndex == null) this._pickFuture();
+    this._holoRefresh();
+    return Promise.allSettled(all.map(prep));
   }
 
   connectedCallback() {
@@ -231,7 +413,8 @@ class TemporalProjector extends HTMLElement {
 
     const camera = this.camera = new THREE.PerspectiveCamera(22, 1, 0.01, 5);
     const controls = this.controls = new OrbitControls(camera, this.canvas);
-    controls.target.set(0.004, 0.012, 0.012);
+    // framed for the device, the table projection and the hologram above the lens
+    controls.target.set(-0.004, 0.056, 0.006);
     camera.position.set(-0.215, 0.255, 0.40);
     controls.enableDamping = true;
     controls.dampingFactor = 0.07;
@@ -315,15 +498,23 @@ class TemporalProjector extends HTMLElement {
     this.proj.position.copy(PROJ_P);
     scene.add(this.proj);
 
+    this._buildHologram(scene);
+    this.lensGlow = sprite(0x6f8cff, 0.03, HOLO.lens);
+
     // animation state
     this.dialSpring = new Spring(DATES[this.state.index].angle, 240, 0.55);
     this.keySpring = new Spring(0, 900, 0.7);
     this.powerSpring = new Spring(0, 900, 0.7);
     this.lightSpring = new Spring(this.state.power ? 1 : 0, 60, 1);
     this.projFade = new Spring(this.state.power ? 1 : 0, 80, 1);
+    this.holoSpring = new Spring(this.state.power ? 1 : 0, 16, 1);
+    this.glitch = 0;
     this.lastDetent = this.state.index;
     this._applyDial(this.dialSpring.v);
-    this._drawProjection(this._labelFor(this.state.index));
+    this.state.projected = this._labelFor(this.state.index);
+    this.state.label = this._entry()?.label || '';
+    this._drawProjection(this.state.projected);
+    this._holoRefresh();
     this._applyLights(this.lightSpring.v);
 
     this._bindInput();
@@ -344,10 +535,11 @@ class TemporalProjector extends HTMLElement {
     const w = this.clientWidth || 1, h = this.clientHeight || 1;
     this.renderer.setSize(w, h, false);
     this.camera.aspect = w / h;
-    // keep the whole device + projection in frame at any aspect ratio
-    const r = 0.072, vfov = THREE.MathUtils.degToRad(this.camera.fov);
+    // keep the whole device, projection and hologram in frame at any aspect ratio
+    // (the scene is taller than it is wide, so tall screens fit to its width and wide screens to its height)
+    const rv = 0.1, rh = 0.076, vfov = THREE.MathUtils.degToRad(this.camera.fov);
     const hfov = 2 * Math.atan(Math.tan(vfov / 2) * this.camera.aspect);
-    const dist = r / Math.sin(Math.min(vfov, hfov) / 2);
+    const dist = Math.max(rv / Math.sin(vfov / 2), rh / Math.sin(hfov / 2));
     const dir = this.camera.position.clone().sub(this.controls.target).normalize();
     this.camera.position.copy(this.controls.target).addScaledVector(dir, dist);
     this.controls.maxDistance = Math.max(dist * 1.6, 0.4);
@@ -461,18 +653,52 @@ class TemporalProjector extends HTMLElement {
     const changed = i !== this.state.index;
     this.state.index = i;
     this.dialSpring.t = DATES[i].angle;
-    if (i !== 4) this.futureYear = null;
+    if (i !== 4) { this.futureYear = null; this.futureIndex = null; }
+    else if (changed && this._content.futures.length) this._pickFuture();   // the dial lands on one of the given futures
     if (changed || !this.futureYear) this._project(this._labelFor(i), 260);
   }
 
   randomFuture() {
     if (!this.state.power) return;
+    if (this._content.futures.length) this._pickFuture();
     // plausible: near futures more likely than far ones
-    this.futureYear = 2026 + Math.round(4 + Math.pow(Math.random(), 1.7) * 70);
+    else this.futureYear = 2026 + Math.round(4 + Math.pow(Math.random(), 1.7) * 70);
     this.state.index = 4;
     this.dialSpring.t = DATES[4].angle;
     this._project(String(this.futureYear), 900);
     this.pulse = 1;
+    this.glitch = 1;
+  }
+
+  _pickFuture() {
+    const F = this._content.futures;
+    let i;
+    do i = Math.floor(Math.random() * F.length); while (F.length > 1 && i === this.futureIndex);
+    this.futureIndex = i;
+    this.futureYear = F[i].year;
+  }
+
+  // Screen position (client px) of a part, for pages that point at it: power, key, dial, lens, hologram.
+  anchor(name) {
+    if (!this.renderer) return null;
+    const v = new THREE.Vector3(), obj = { power: this.powerBtn, key: this.key, dial: this.dial }[name];
+    if (obj) new THREE.Box3().setFromObject(obj).getCenter(v);
+    else if (name === 'lens') v.copy(HOLO.lens);
+    else if (name === 'hologram') v.copy(HOLO.lens).add(new THREE.Vector3(0, HOLO.gap + HOLO.h / 2, 0));
+    else return null;
+    v.project(this.camera);
+    const r = this.getBoundingClientRect();
+    return { x: r.left + (v.x + 1) / 2 * r.width, y: r.top + (1 - v.y) / 2 * r.height };
+  }
+
+  // True when the point (client px) is on the visible hologram image.
+  hologramHit(x, y) {
+    if (!this.holo || this.holoSpring.v < 0.6) return false;
+    const r = this.getBoundingClientRect();
+    const ray = new THREE.Raycaster();
+    ray.setFromCamera(new THREE.Vector2((x - r.left) / r.width * 2 - 1, -(y - r.top) / r.height * 2 + 1), this.camera);
+    const hit = ray.intersectObject(this.holo.image)[0];
+    return !!hit && Math.hypot((hit.uv.x - 0.5) * 2, (hit.uv.y - 0.5) * 1.86) < 0.9 && hit.uv.y > 0.12;
   }
 
   togglePower() { this._setPower(!this.state.power); }
@@ -482,6 +708,7 @@ class TemporalProjector extends HTMLElement {
     this.state.power = on;
     this.lightSpring.t = on ? 1 : 0;
     this.projFade.t = on ? 1 : 0;
+    this.holoSpring.t = on ? 1 : 0;
     if (on) this._project(this._labelFor(this.state.index), 500);
     this.dispatchEvent(new CustomEvent('powerchange', { detail: { on }, bubbles: true, composed: true }));
     this._announce();
@@ -506,15 +733,183 @@ class TemporalProjector extends HTMLElement {
     g.globalAlpha = 0.85 - jitter * 0.4;
     g.fillText(text, c.width / 2, c.height / 2 + 6);
     this.projTex.needsUpdate = true;
+    this._holoText(text);
+  }
+
+  // ---------------------------------------------------------------- hologram
+  _buildHologram(scene) {
+    const group = new THREE.Group();
+    group.position.copy(HOLO.lens);
+    scene.add(group);
+    const blend = { transparent: true, depthWrite: false, blending: THREE.NormalBlending };
+
+    // the year, drawn white on black: the fallback image when a date has no picture
+    const tc = document.createElement('canvas');
+    tc.width = 480; tc.height = Math.round(480 * HOLO.h / HOLO.w);
+    const textTex = new THREE.CanvasTexture(tc);
+    Object.assign(textTex, { flipY: false, colorSpace: THREE.NoColorSpace, generateMipmaps: false, minFilter: THREE.LinearFilter });
+    const blank = new THREE.DataTexture(new Uint8Array([0, 0, 0, 255]), 1, 1);
+    blank.needsUpdate = true;
+    this._textSlot = { text: true, tex: textTex, maskTex: null, rect: new THREE.Vector4(0, 0, 1, 1), cols: 1, rows: 1 };
+
+    const U = (v) => ({ value: v });
+    const image = new THREE.Mesh(new THREE.PlaneGeometry(HOLO.w, HOLO.h), new THREE.ShaderMaterial({
+      ...blend, side: THREE.DoubleSide, vertexShader: HOLO_IMAGE_VS, fragmentShader: HOLO_IMAGE_FS,
+      uniforms: {
+        uTexA: U(textTex), uTexB: U(textTex), uMaskA: U(blank), uMaskB: U(blank),
+        uRectA: U(new THREE.Vector4(0, 0, 1, 1)), uRectB: U(new THREE.Vector4(0, 0, 1, 1)),
+        uSheetA: U(new THREE.Vector3(1, 1, 0)), uSheetB: U(new THREE.Vector3(1, 1, 0)),
+        uFlagA: U(new THREE.Vector3()), uFlagB: U(new THREE.Vector3()),
+        uLevelsA: U(new THREE.Vector3(0, 1, 1)), uLevelsB: U(new THREE.Vector3(0, 1, 1)),
+        uMix: U(0), uReveal: U(0), uTime: U(0), uScan: U(reduceMotion ? 0 : 0.35), uCell: U(3), uGlitch: U(0), uAlpha: U(0),
+        uInk: U(HOLO_INK), uSignal: U(HOLO_SIGNAL),
+      },
+    }));
+    image.position.y = HOLO.gap + HOLO.h / 2;
+    image.renderOrder = 3;
+    group.add(image);
+
+    const beam = new THREE.Mesh(
+      new THREE.CylinderGeometry(HOLO.r1, HOLO.r0, HOLO.top, 64, 1, true).translate(0, HOLO.top / 2, 0),
+      new THREE.ShaderMaterial({ ...blend, side: THREE.DoubleSide, vertexShader: HOLO_BEAM_VS, fragmentShader: HOLO_BEAM_FS,
+        uniforms: { uGrow: U(0), uTime: U(0), uAlpha: U(0), uPulse: U(0), uCol: U(HOLO_INK.clone()) } }));
+    beam.renderOrder = 2;
+    group.add(beam);
+
+    const N = 90, seeds = new Float32Array(N * 3);
+    for (let i = 0; i < N; i++) seeds.set([Math.random() * Math.PI * 2, Math.sqrt(Math.random()) * 0.9, Math.random()], i * 3);
+    const mg = new THREE.BufferGeometry();
+    mg.setAttribute('position', new THREE.BufferAttribute(new Float32Array(N * 3), 3));
+    mg.setAttribute('aSeed', new THREE.BufferAttribute(seeds, 3));
+    const motes = new THREE.Points(mg, new THREE.ShaderMaterial({ ...blend, vertexShader: HOLO_MOTES_VS, fragmentShader: HOLO_MOTES_FS,
+      uniforms: { uTime: U(0), uGrow: U(0), uH: U(HOLO.top), uR0: U(HOLO.r0), uR1: U(HOLO.r1), uSize: U(3), uAlpha: U(0),
+        uCol: U(HOLO_INK.clone()) } }));
+    motes.frustumCulled = false;
+    motes.renderOrder = 4;
+    group.add(motes);
+
+    this.holo = { group, image, beam, motes, blank, a: this._textSlot, b: null, mixStart: 0 };
+    this._setSlot('A', this._textSlot, false);
+  }
+
+  _entry() {
+    const c = this._content, i = this.state.index;
+    if (i === 4) return this.futureIndex != null ? c.futures[this.futureIndex] : null;
+    return c.dates[DATES[i].label] || null;
+  }
+
+  _setSlot(which, slot, future) {
+    const u = this.holo.image.material.uniforms;
+    u['uTex' + which].value = slot.tex;
+    u['uMask' + which].value = slot.maskTex || this.holo.blank;
+    u['uRect' + which].value.copy(slot.rect);
+    u['uSheet' + which].value.set(slot.cols, slot.rows, 0);
+    u['uFlag' + which].value.set(slot.text || slot.invert === false ? 0 : 1, slot.maskTex ? 1 : 0, future ? 1 : 0);
+    u['uLevels' + which].value.copy(slot.levels || new THREE.Vector3(0, 1, 1));
+    if (which === 'A') this.holo.a = slot; else this.holo.b = slot;
+  }
+
+  // Point the hologram at the current date: cross-dissolve to its picture, or to the year.
+  _holoRefresh() {
+    if (!this.holo) return;
+    const e = this._entry(), next = e?.ready ? e : this._textSlot, future = this.state.index === 4, h = this.holo;
+    const shown = h.b || h.a;
+    if (shown === next && (h.b ? h.futureB : h.futureA) === future) return;
+    if (h.b) { this._setSlot('A', h.b, h.futureB); h.futureA = h.futureB; h.b = null; }
+    if (h.a === next && next.text) { this._setSlot('A', next, future); h.futureA = future; this.glitch = Math.max(this.glitch, 0.45); return; }
+    this._setSlot('B', next, future);
+    h.futureB = future;
+    h.mixStart = performance.now();
+    h.image.material.uniforms.uMix.value = 0;
+    this.glitch = Math.max(this.glitch, 0.5);
+  }
+
+  _holoText(text) {
+    const slot = this._textSlot;
+    if (!slot) return;
+    const c = slot.tex.image, g = c.getContext('2d');
+    g.fillStyle = '#000';
+    g.fillRect(0, 0, c.width, c.height);
+    if (text) {
+      const word = /\D/.test(text);
+      g.font = `${word ? 500 : 400} ${word ? 92 : 168}px "Helvetica Neue", Helvetica, Arial, sans-serif`;
+      if ('letterSpacing' in g) g.letterSpacing = word ? '10px' : '0px';
+      g.textAlign = 'center';
+      g.textBaseline = 'middle';
+      g.fillStyle = '#fff';
+      g.fillText(text, c.width / 2, c.height * 0.5);
+    }
+    slot.tex.needsUpdate = true;
+  }
+
+  _tickHologram(dt, now) {
+    const h = this.holo, u = h.image.material.uniforms, bu = h.beam.material.uniforms, mu = h.motes.material.uniforms;
+    this.holoSpring.step(dt);
+    const k = THREE.MathUtils.clamp(this.holoSpring.v, 0, 1);
+    const grow = THREE.MathUtils.clamp(k * 1.7, 0, 1), reveal = THREE.MathUtils.clamp((k - 0.3) / 0.7, 0, 1);
+    const t = reduceMotion ? 0 : now / 1000;
+    // the image turns to face the camera around its vertical axis
+    const cam = this.camera.position;
+    h.image.rotation.y = Math.atan2(cam.x - HOLO.lens.x, cam.z - HOLO.lens.z);
+    if (h.b) {
+      const m = Math.min(1, (now - h.mixStart) / (reduceMotion ? 1 : 520));
+      u.uMix.value = m * m * (3 - 2 * m);
+      if (m >= 1) { this._setSlot('A', h.b, h.futureB); h.futureA = h.futureB; h.b = null; u.uMix.value = 0; }
+    }
+    // sprite sheets play at their own frame rate
+    for (const [which, slot] of [['A', h.a], ['B', h.b]]) {
+      if (slot?.fps && slot.cols * slot.rows > 1) u['uSheet' + which].value.z = reduceMotion ? 0 : (now / 1000 * slot.fps) % (slot.cols * slot.rows);
+    }
+    if (!reduceMotion && this.state.power && Math.random() < dt * 0.25) this.glitch = Math.max(this.glitch, 0.3);   // the odd stray flicker
+    this.glitch = Math.max(0, this.glitch - dt * 2.6);
+    const future = (h.b ? h.futureB : h.futureA) ? 1 : 0;
+    const flicker = reduceMotion ? 1 : 1 - 0.05 * Math.random() * (this.state.power ? 1 : 0);
+    const pulse = this.pulse || 0;
+    u.uReveal.value = reveal;
+    u.uTime.value = t;
+    u.uGlitch.value = reduceMotion ? 0 : this.glitch;
+    u.uAlpha.value = Math.min(1, k * 2.5) * flicker;
+    // dither cell: about 95 rows across the image, so a small hologram keeps its face; never finer than 1.5 CSS px
+    const top = HOLO.lens.clone().setY(HOLO.lens.y + HOLO.top).project(this.camera);
+    const bottom = HOLO.lens.clone().setY(HOLO.lens.y + HOLO.gap).project(this.camera);
+    const imgPx = Math.abs(top.y - bottom.y) / 2 * this.clientHeight;
+    u.uCell.value = THREE.MathUtils.clamp(imgPx / 95, 1.5, 2.8) * this.renderer.getPixelRatio();
+    bu.uGrow.value = grow;
+    bu.uTime.value = t;
+    bu.uAlpha.value = Math.min(1, k * 3) * flicker;
+    bu.uPulse.value = pulse;
+    bu.uCol.value.lerpVectors(HOLO_INK, HOLO_SIGNAL, future * 0.85);
+    mu.uTime.value = t;
+    mu.uGrow.value = grow;
+    mu.uAlpha.value = Math.min(1, k * 2);
+    mu.uSize.value = 2.6 * this.renderer.getPixelRatio();
+    mu.uCol.value.copy(bu.uCol.value);
+    h.group.visible = k > 0.001;
+    this.lensGlow.material.opacity = 0.85 * grow * (1 + pulse);
+
+    // caption above the image, in page type
+    const cap = this.caption, label = this.state.label;
+    if (cap.dataset.text !== this.state.projected + label) {
+      cap.dataset.text = this.state.projected + label;
+      cap.querySelector('b').textContent = label ? this.state.projected : '';
+      cap.querySelector('span').textContent = label;
+    }
+    cap.classList.toggle('future', !!future);
+    const p = HOLO.lens.clone().add(new THREE.Vector3(0, HOLO.top + 0.004, 0)).project(this.camera);
+    cap.style.transform = `translate(${((p.x + 1) / 2 * this.clientWidth).toFixed(1)}px, ${((1 - p.y) / 2 * this.clientHeight).toFixed(1)}px)`;
+    cap.style.opacity = label ? String(reveal * reveal * flicker) : '0';
   }
 
   _project(text, ms) {
     this.state.projected = text;
+    this.state.label = this._entry()?.label || '';
+    this._holoRefresh();
     clearInterval(this._scramble);
     const finish = () => {
       this._drawProjection(text);
       this.dispatchEvent(new CustomEvent('datechange', {
-        detail: { date: DATES[this.state.index].label, projected: text }, bubbles: true, composed: true }));
+        detail: { date: DATES[this.state.index].label, projected: text, label: this.state.label,
+          future: this.state.index === 4 ? this.futureIndex : null }, bubbles: true, composed: true }));
       this._announce();
     };
     if (reduceMotion || !this.state.power) return finish();
@@ -529,7 +924,8 @@ class TemporalProjector extends HTMLElement {
   }
 
   _announce() {
-    this.live.textContent = this.state.power ? `Projecting ${this.state.projected}` : 'Powered off';
+    const label = this.state.label ? `, ${this.state.label}` : '';
+    this.live.textContent = this.state.power ? `Projecting ${this.state.projected}${label}` : 'Powered off';
   }
 
   // ---------------------------------------------------------------- frame
@@ -564,6 +960,7 @@ class TemporalProjector extends HTMLElement {
     const flicker = this.state.power ? 1 - 0.025 * Math.random() : 1;
     this.proj.material.opacity = 0.48 * this.projFade.v * flicker;
     this.controls.update();
+    this._tickHologram(dt, performance.now());
     this.renderer.render(this.scene, this.camera);
   }
 }
