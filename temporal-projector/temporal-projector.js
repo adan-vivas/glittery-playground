@@ -46,6 +46,30 @@ HOLO.top = HOLO.gap + HOLO.h;
 // table view: what the camera looks at, and the radius that --stage-scale sizes
 const TABLE_TARGET = new THREE.Vector3(0.002, 0.013, 0.006);
 const TABLE_RADIUS = 0.07;
+// The table scene, all of it adjustable live with setScene() (the homepage's scene lab drives this):
+//   camera  elevation / azimuth in degrees (azimuth 0 = straight in front, + = from the right), fov in degrees;
+//           x, y, scale: where the device sits and how big (null = the --stage-* custom properties decide)
+//   light   azimuth: where it stands on the table, in degrees from "behind the scene" (the top of the screen) toward
+//           the left of the screen, so it stays put on screen as the camera turns; elevation in degrees; intensity;
+//           shadow softness (filter radius), opacity, area (half-size of the shadow map in metres), map size
+//   room    the table is the floor of a box this wide and deep (metres, centred on the device) whose walls are shaded
+//           `shade` darker than the table, with `corner` of soft darkening where wall meets floor. Walls between the
+//           camera and the scene are cut away, like a dollhouse.
+const TABLE_SCENE = {
+  camera: { elevation: 50, azimuth: 40, fov: 22, x: null, y: null, scale: null },
+  light: { azimuth: 56, elevation: 43, intensity: 1.35, softness: 16, opacity: 0.22, area: 0.45, mapSize: 1024 },
+  room: { walls: true, width: 2.4, depth: 2, shade: 0.07, corner: 0.35 },
+};
+const clone = (o) => JSON.parse(JSON.stringify(o));
+
+function gradientTexture(stops, vertical = true) {
+  const c = document.createElement('canvas');
+  c.width = vertical ? 4 : 256; c.height = vertical ? 256 : 4;
+  const g = c.getContext('2d'), grd = vertical ? g.createLinearGradient(0, 0, 0, 256) : g.createLinearGradient(0, 0, 256, 0);
+  stops.forEach(([o, col]) => grd.addColorStop(o, col));
+  g.fillStyle = grd; g.fillRect(0, 0, c.width, c.height);
+  const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; return t;
+}
 // Colours are sRGB triplets written straight to the framebuffer: the hologram is light, not a lit surface.
 const HOLO_INK = new THREE.Vector3(0.11, 0.18, 1.0);       // the homepage's dither blue
 const HOLO_SIGNAL = new THREE.Vector3(1.0, 0.23, 0.055);   // FUTURE orange
@@ -446,27 +470,20 @@ class TemporalProjector extends HTMLElement {
     key.shadow.normalBias = 0.0002;
     scene.add(key, key.target);
 
+    this.keyLight = key;
+    this.tickers = new Set();   // functions called every frame with dt, before the scene is drawn
     if (this.table) {
-      // seen from the front right, about 50° above the table
-      const az = THREE.MathUtils.degToRad(40), el = THREE.MathUtils.degToRad(50);
-      this.viewDir = new THREE.Vector3(Math.sin(az) * Math.cos(el), Math.sin(el), Math.cos(az) * Math.cos(el));
-      controls.target.copy(TABLE_TARGET);
-      // the light stands where the top left corner of the screen meets the table, high up
-      const away = new THREE.Vector3(-this.viewDir.x, 0, -this.viewDir.z).normalize();
-      const left = new THREE.Vector3(-this.viewDir.z, 0, this.viewDir.x).normalize();
-      key.position.copy(TABLE_TARGET).addScaledVector(away, 0.2).addScaledVector(left, 0.3).add(new THREE.Vector3(0, 0.34, 0));
-      key.target.position.copy(TABLE_TARGET);
-      key.intensity = 1.35;
-      Object.assign(key.shadow.camera, { left: -0.16, right: 0.16, top: 0.16, bottom: -0.16, near: 0.1, far: 1 });
-      key.shadow.mapSize.set(512, 512);    // low resolution plus a wide filter: a soft, diffuse shadow
-      key.shadow.radius = 16;
-      key.shadow.blurSamples = 25;
+      this.sceneCfg = clone(TABLE_SCENE);
       key.shadow.bias = -0.0002;
-      const floor = new THREE.Mesh(new THREE.PlaneGeometry(4, 4), new THREE.ShadowMaterial({ color: 0x1c1a2e, opacity: 0.22 }));
+      key.shadow.blurSamples = 25;
+      const floor = this.floor = new THREE.Mesh(new THREE.PlaneGeometry(6, 6), new THREE.ShadowMaterial({ color: 0x1c1a2e, opacity: 0.22 }));
       floor.rotation.x = -Math.PI / 2;
       floor.position.y = -0.0002;
       floor.receiveShadow = true;
       scene.add(floor);
+      this.room = new THREE.Group();
+      scene.add(this.room);
+      this._applyScene();
     }
 
     const base = new URL('./assets/', import.meta.url);
@@ -497,6 +514,7 @@ class TemporalProjector extends HTMLElement {
       o.receiveShadow = true;
     });
     scene.add(device);
+    this.deviceRoot = device;
     this.deviceBox = new THREE.Box3().setFromObject(device);
     this.dial = device.getObjectByName('dial');
     this.key = device.getObjectByName('prf_key');
@@ -587,7 +605,10 @@ class TemporalProjector extends HTMLElement {
   //   --stage-scale         device radius as a fraction of the element's height (default .16), never wider than 42% of its width
   _frameTable(w, h) {
     const cs = getComputedStyle(this), num = (n, d) => { const v = parseFloat(cs.getPropertyValue(n)); return Number.isFinite(v) ? v : d; };
-    const fx = num('--stage-x', 0.5), fy = num('--stage-y', 0.55), sc = num('--stage-scale', 0.16);
+    const cam = this.sceneCfg.camera, el = THREE.MathUtils.degToRad(cam.elevation), az = THREE.MathUtils.degToRad(cam.azimuth);
+    this.viewDir = new THREE.Vector3(Math.sin(az) * Math.cos(el), Math.sin(el), Math.cos(az) * Math.cos(el));
+    this.camera.fov = cam.fov;
+    const fx = cam.x ?? num('--stage-x', 0.5), fy = cam.y ?? num('--stage-y', 0.55), sc = cam.scale ?? num('--stage-scale', 0.16);
     const pr = Math.min(h * sc, w * 0.42), tan = Math.tan(THREE.MathUtils.degToRad(this.camera.fov) / 2);
     const dist = TABLE_RADIUS * (h / 2) / (pr * tan);
     this.camera.position.copy(TABLE_TARGET).addScaledVector(this.viewDir, dist);
@@ -595,6 +616,92 @@ class TemporalProjector extends HTMLElement {
     this.camera.setViewOffset(w, h, (0.5 - fx) * w, (0.5 - fy) * h, w, h);
     this.camera.updateProjectionMatrix();
     this.camera.updateMatrixWorld();
+    this._placeLight();
+  }
+
+  // ---------------------------------------------------------------- table scene
+  // Merge a partial config ({ camera: { elevation: 30 } }) and rebuild what it touches.
+  setScene(patch = {}) {
+    if (!this.table) return;
+    for (const k of Object.keys(patch)) Object.assign(this.sceneCfg[k] ??= {}, patch[k]);
+    this._applyScene();
+    this.dispatchEvent(new CustomEvent('scenechange', { detail: clone(this.sceneCfg) }));
+  }
+  getScene() { return clone(this.sceneCfg ?? TABLE_SCENE); }
+  static get defaultScene() { return clone(TABLE_SCENE); }
+
+  _applyScene() {
+    const L = this.sceneCfg.light, key = this.keyLight;
+    key.intensity = L.intensity;
+    key.shadow.radius = L.softness;
+    if (key.shadow.mapSize.x !== L.mapSize) { key.shadow.mapSize.set(L.mapSize, L.mapSize); key.shadow.map?.dispose(); key.shadow.map = null; }
+    Object.assign(key.shadow.camera, { left: -L.area, right: L.area, top: L.area, bottom: -L.area, near: 0.05, far: 2 });
+    key.shadow.camera.updateProjectionMatrix();
+    this.floor.material.opacity = L.opacity;
+    this._buildRoom();
+    this._footprint = null;
+    if (this.renderer) this._resize();
+  }
+
+  // The light stands where the camera's screen says "top left": measured from the viewer's own directions on the table.
+  _placeLight() {
+    const L = this.sceneCfg.light, key = this.keyLight, v = this.viewDir;
+    const away = new THREE.Vector3(-v.x, 0, -v.z).normalize(), left = new THREE.Vector3(-v.z, 0, v.x).normalize();
+    const az = THREE.MathUtils.degToRad(L.azimuth), el = THREE.MathUtils.degToRad(L.elevation), d = 0.6;
+    const ground = away.multiplyScalar(Math.cos(az)).addScaledVector(left, Math.sin(az)).multiplyScalar(Math.cos(el) * d);
+    key.position.copy(TABLE_TARGET).add(ground).add(new THREE.Vector3(0, Math.sin(el) * d, 0));
+    key.target.position.copy(TABLE_TARGET);
+    key.target.updateMatrixWorld();
+  }
+
+  // Unit vector toward the light, in world space (for things the page draws itself).
+  get lightDir() { return this.keyLight.position.clone().sub(this.keyLight.target.position).normalize(); }
+
+  // The room: four walls with inward faces, one-sided, so the ones between the camera and the device vanish.
+  _buildRoom() {
+    const R = this.sceneCfg.room, g = this.room;
+    g.children.slice().forEach((o) => { g.remove(o); o.geometry?.dispose(); o.material?.map?.dispose(); o.material?.dispose(); });
+    g.visible = !!R.walls;
+    if (!R.walls) return;
+    const page = new THREE.Color(getComputedStyle(this).getPropertyValue('--table-color').trim() || '#e8e7ee');
+    const wall = page.clone().multiplyScalar(1 - R.shade), top = page.clone().multiplyScalar(1 - R.shade * 0.35);
+    const H = 1.2, hw = R.width / 2, hd = R.depth / 2;
+    const face = gradientTexture([[0, '#' + top.getHexString()], [1, '#' + wall.getHexString()]]);
+    const ao = gradientTexture([[0, `rgba(20,18,34,${R.corner})`], [1, 'rgba(20,18,34,0)']]);
+    // [position, rotation y, length]
+    const walls = [
+      [new THREE.Vector3(0, H / 2, -hd), 0, R.width],            // back
+      [new THREE.Vector3(0, H / 2, hd), Math.PI, R.width],       // front
+      [new THREE.Vector3(-hw, H / 2, 0), Math.PI / 2, R.depth],  // left
+      [new THREE.Vector3(hw, H / 2, 0), -Math.PI / 2, R.depth],  // right
+    ];
+    for (const [pos, ry, len] of walls) {
+      const w = new THREE.Group();
+      w.position.copy(pos); w.rotation.y = ry;
+      const m = new THREE.Mesh(new THREE.PlaneGeometry(len, H), new THREE.MeshBasicMaterial({ map: face, toneMapped: false }));
+      const sh = new THREE.Mesh(new THREE.PlaneGeometry(len, H), new THREE.ShadowMaterial({ color: 0x1c1a2e, opacity: this.sceneCfg.light.opacity }));
+      sh.position.z = 0.0005; sh.receiveShadow = true;
+      // soft darkening where wall meets table: a strip up the wall and one along the floor
+      const up = new THREE.Mesh(new THREE.PlaneGeometry(len, 0.08), new THREE.MeshBasicMaterial({ map: ao, transparent: true, depthWrite: false, toneMapped: false }));
+      up.rotation.z = Math.PI; up.position.set(0, -H / 2 + 0.04, 0.001);
+      const flat = new THREE.Mesh(new THREE.PlaneGeometry(len, 0.08), new THREE.MeshBasicMaterial({ map: ao, transparent: true, depthWrite: false, toneMapped: false }));
+      flat.rotation.x = -Math.PI / 2; flat.rotation.z = Math.PI; flat.position.set(0, -H / 2 + 0.0004, 0.04);
+      w.add(m, sh, up, flat);
+      g.add(w);
+    }
+  }
+
+  // The visible table: where the screen's edges meet the floor, as rays from the camera. For pages that keep things in view.
+  floorRay(clientX, clientY, y = 0) {
+    const r = this.getBoundingClientRect(), ray = new THREE.Raycaster();
+    ray.setFromCamera(new THREE.Vector2((clientX - r.left) / r.width * 2 - 1, -(clientY - r.top) / r.height * 2 + 1), this.camera);
+    const hit = new THREE.Vector3();
+    return ray.ray.intersectPlane(new THREE.Plane(new THREE.Vector3(0, 1, 0), -y), hit) ? hit : null;
+  }
+  // World point -> client px (and depth in front of the camera).
+  toScreen(v) {
+    const r = this.getBoundingClientRect(), p = v.clone().project(this.camera);
+    return { x: r.left + (p.x + 1) / 2 * r.width, y: r.top + (1 - p.y) / 2 * r.height, z: p.z };
   }
 
   // The device's outline on screen (client px, convex, clockwise on screen), for pages that let things bump into it.
@@ -1034,6 +1141,7 @@ class TemporalProjector extends HTMLElement {
     this.proj.material.opacity = 0.48 * this.projFade.v * flicker;
     if (!this.table) this.controls.update();
     this._tickHologram(dt, performance.now());
+    for (const f of this.tickers) { try { f(dt); } catch (e) { console.error(e); } }
     this.renderer.render(this.scene, this.camera);
   }
 }
