@@ -14,7 +14,8 @@ const store = { get(k, d) { try { return JSON.parse(localStorage.getItem(k)) ?? 
 
 const PAPER_DEFAULTS = { ...paper().PAPER };
 const BUILTIN = {
-  'Mockup · front right, 50°': {},
+  'Default · wide, 32°': {},
+  'Mockup · front right, 50°': { camera: { elevation: 50, azimuth: 40, fov: 22, scale: null } },
   'Low · show the air': { camera: { elevation: 20, azimuth: 32, fov: 30, scale: 0.13, y: 0.66 }, room: { width: 1.0, depth: 0.8 } },
   'Overhead': { camera: { elevation: 82, azimuth: 15, fov: 22 } },
   'Front · against the wall': { camera: { elevation: 28, azimuth: 0, fov: 26, scale: 0.15, y: 0.62 }, room: { width: 1.4, depth: 0.42 } },
@@ -65,13 +66,18 @@ const CONTROLS = [
     ['light.azimuth', 'Direction°', -180, 180, 1], ['light.elevation', 'Height°', 5, 89, 1], ['light.intensity', 'Intensity', 0, 4, 0.05],
     ['light.softness', 'Softness', 0, 40, 1], ['light.opacity', 'Darkness', 0, 0.8, 0.01], ['light.area', 'Shadow area m', 0.15, 1.5, 0.01],
   ]],
+  ['Projector', [
+    ['device.x', 'Across m', -1, 1, 0.005], ['device.z', 'Depth m', -1, 1, 0.005], ['device.rotation', 'Turn°', -180, 180, 1],
+  ]],
   ['Room', [
-    ['room.walls', 'Walls', 'bool'], ['room.width', 'Width m', 0.3, 4, 0.01], ['room.depth', 'Depth m', 0.3, 4, 0.01],
-    ['room.shade', 'Wall shade', 0, 0.4, 0.005], ['room.corner', 'Corner shade', 0, 1, 0.01],
+    ['room.walls', 'Walls', 'bool'], ['room.width', 'Width m', 0.6, 5, 0.01], ['room.depth', 'Depth m', 0.6, 5, 0.01],
+    ['room.cove', 'Floor sweep m', 0.01, 0.8, 0.005], ['room.round', 'Corner round m', 0.01, 1.5, 0.01],
+    ['room.shade', 'Wall shade', 0, 0.4, 0.005], ['room.corner', 'Bend shade', 0, 0.5, 0.005],
   ]],
   ['Paper', [
     ['paper.radius', 'Ball radius m', 0.005, 0.03, 0.0005], ['paper.hold', 'Held height m', 0.03, 0.5, 0.005], ['paper.gravity', 'Gravity m/s²', 0.5, 15, 0.1],
-    ['paper.friction', 'Friction', 0, 2, 0.01], ['paper.drag', 'Air drag', 0, 10, 0.1], ['paper.bounce', 'Bounce', 0, 0.9, 0.01],
+    ['paper.friction', 'Friction', 0, 2, 0.01], ['paper.drag', 'Table drag', 0, 10, 0.1], ['paper.air', 'Air drag', 0, 4, 0.05], ['paper.bounce', 'Bounce', 0, 0.9, 0.01],
+    ['paper.lift', 'Pick-up lift m', 0, 0.1, 0.001], ['paper.throw', 'Throw strength', 0, 3, 0.05], ['paper.toss', 'Upward toss → away', 0, 2, 0.05],
     ['paper.key', 'Key on paper', 0, 2, 0.05], ['paper.fill', 'Sky on paper', 0, 3, 0.05], ['paper.front', 'Room behind you', 0, 3, 0.05],
   ]],
 ];
@@ -99,7 +105,9 @@ for (const [title, rows] of CONTROLS) {
     }
   }
 }
-body.insertAdjacentHTML('beforeend', `<h3>Overlays</h3>
+body.insertAdjacentHTML('beforeend', `<label class="check"><input type="checkbox" data-move> Drag the projector to place it</label>
+  <p class="note">Only while the lab is open. Visitors can't move it.</p>
+  <h3>Overlays</h3>
   <label class="check"><input type="checkbox" data-ov="grid" checked> Table grid (5 cm)</label>
   <label class="check"><input type="checkbox" data-ov="room" checked> Room box</label>
   <label class="check"><input type="checkbox" data-ov="light" checked> Light and shadow frustum</label>
@@ -154,7 +162,7 @@ root.addEventListener('click', async (e) => {
   if (act === 'reset') { apply(fixture({})); fillFixtures(Object.keys(BUILTIN)[0]); }
   if (act === 'copy') { const txt = JSON.stringify(current(), null, 2); try { await navigator.clipboard.writeText(txt); e.target.textContent = 'Copied'; setTimeout(() => (e.target.textContent = 'Copy JSON'), 1200); } catch { prompt('Copy this JSON', txt); } }
   if (act === 'paste') { const txt = prompt('Paste a fixture JSON'); if (txt) try { apply(JSON.parse(txt)); } catch { alert('That is not valid JSON.'); } }
-  if (act === 'drop') { const b = device.deviceBox; P.drop((b.min.x + b.max.x) / 2 + 0.02, b.max.z + 0.04, 0.15); }
+  if (act === 'drop') { const c = device.rig.localToWorld(new THREE.Vector3(0.02, 0, 0.08)); P.drop(c.x, c.z, 0.15); }
   if (act === 'throw') { if (P.mode === 'ball') { const d = new THREE.Vector3().sub(P.B.p).setY(0).normalize().multiplyScalar(0.9); P.B.v.x = d.x; P.B.v.z = d.z; } }
   if (act === 'open') document.getElementById('ball').click();
   if (act === 'close') window.__work?.close(null);
@@ -173,8 +181,14 @@ function rebuildStatic() {
   const size = Math.max(cfg.room.width, cfg.room.depth), grid = new THREE.GridHelper(size, Math.round(size / 0.05), 0x1c2eff, 0x8890c8);
   grid.material.transparent = true; grid.material.opacity = 0.35; grid.position.y = 0.0006;
   gGrid.add(grid);
-  const box = new THREE.LineSegments(new THREE.EdgesGeometry(new THREE.BoxGeometry(cfg.room.width, 0.6, cfg.room.depth)), ink(0xff3a0e, 0.7));
-  box.position.y = 0.3; gRoom.add(box);
+  const pts = [], N = 240;
+  for (let i = 0; i <= N; i++) {   // the foot of the cove: where the floor starts to sweep up
+    const a = i / N * Math.PI * 2, dir = new THREE.Vector3(Math.cos(a), 0, Math.sin(a));
+    let lo = 0, hi = 3; for (let k = 0; k < 30; k++) { const m = (lo + hi) / 2; device.roomSDF(dir.x * m, dir.z * m).d < 0 ? lo = m : hi = m; }
+    pts.push(dir.x * lo, 0.001, dir.z * lo);
+  }
+  const outline = new THREE.Line(new THREE.BufferGeometry().setAttribute('position', new THREE.Float32BufferAttribute(pts, 3)), ink(0xff3a0e, 0.7));
+  gRoom.add(outline);
   const k = device.keyLight, cam = new THREE.CameraHelper(k.shadow.camera);
   cam.material.depthTest = false; cam.material.transparent = true; cam.material.opacity = 0.5;
   const arrow = new THREE.ArrowHelper(device.lightDir, k.target.position, 0.25, 0xffb000, 0.03, 0.015);
@@ -197,9 +211,10 @@ device.tickers.add(() => {
     const pts = [];
     for (const e of P.viewLines()) { const tx = -e.nz, tz = e.nx; pts.push(e.px - tx * 2, r, e.pz - tz * 2, e.px + tx * 2, r, e.pz + tz * 2); }
     boundsLine.geometry.setAttribute('position', new THREE.Float32BufferAttribute(pts, 3));
-    const b = device.deviceBox, f = [];
+    const b = device.localBox, f = [];
     if (b) for (let i = 0; i <= 64; i++) { const a = i / 64 * Math.PI * 2, rad = 0.012 + r, hx = (b.max.x - b.min.x) / 2 - 0.012, hz = (b.max.z - b.min.z) / 2 - 0.012;
-      const q = Math.floor(i / 16) % 4, cx = [hx, -hx, -hx, hx][q], cz = [hz, hz, -hz, -hz][q]; f.push((b.min.x + b.max.x) / 2 + cx + Math.cos(a) * rad, 0.0008, (b.min.z + b.max.z) / 2 + cz + Math.sin(a) * rad); }
+      const q = Math.floor(i / 16) % 4, cx = [hx, -hx, -hx, hx][q], cz = [hz, hz, -hz, -hz][q];
+      const w = device.rig.localToWorld(new THREE.Vector3((b.min.x + b.max.x) / 2 + cx + Math.cos(a) * rad, 0.0008, (b.min.z + b.max.z) / 2 + cz + Math.sin(a) * rad)); f.push(w.x, w.y, w.z); }
     footLine.geometry.setAttribute('position', new THREE.Float32BufferAttribute(f, 3));
   }
   // the paper: a line from it straight down to the table, and a ring where it would land
@@ -218,6 +233,7 @@ device.tickers.add(() => {
     body.querySelector('[data-readout]').textContent = [
       `camera   ${cp.toArray().map((v) => v.toFixed(3)).join(', ')} m`,
       `distance ${cp.distanceTo(new THREE.Vector3(0.002, 0.013, 0.006)).toFixed(3)} m, fov ${cam.fov}°`,
+      `projector at ${cfg.device.x.toFixed(3)}, ${cfg.device.z.toFixed(3)} m, turned ${cfg.device.rotation}°`,
       `1 cm on the table at the device ≈ ${Math.hypot(b.x - a.x, b.y - a.y).toFixed(1)} px`,
       `light    el ${cfg.light.elevation}°, dir ${cfg.light.azimuth}° from top toward left`,
       `paper    ${s.pmode ?? '–'} at ${(s.p || []).join(', ')}`,
@@ -226,6 +242,26 @@ device.tickers.add(() => {
     ].filter(Boolean).join('\n');
   }
 });
+
+// Drag to place: with the box ticked, pressing on the projector picks it up and moves it across the table.
+let moving = null;
+addEventListener('pointerdown', (e) => {
+  if (!body.querySelector('[data-move]').checked || (e.target instanceof Node && root.contains(e.target)) || e.button !== 0) return;
+  const rc = device.getBoundingClientRect(), ray = new THREE.Raycaster();
+  ray.setFromCamera(new THREE.Vector2((e.clientX - rc.left) / rc.width * 2 - 1, -(e.clientY - rc.top) / rc.height * 2 + 1), device.camera);
+  if (!ray.intersectObject(device.deviceRoot, true).length) return;
+  const hit = device.floorRay(e.clientX, e.clientY), d = device.getScene().device;
+  if (!hit) return;
+  moving = { id: e.pointerId, dx: d.x - hit.x, dz: d.z - hit.z };
+  e.preventDefault(); e.stopPropagation();
+}, true);
+addEventListener('pointermove', (e) => {
+  if (!moving || e.pointerId !== moving.id) return;
+  const hit = device.floorRay(e.clientX, e.clientY); if (!hit) return;
+  device.setScene({ device: { x: +(hit.x + moving.dx).toFixed(3), z: +(hit.z + moving.dz).toFixed(3) } }); sync();
+  e.stopPropagation();
+}, true);
+addEventListener('pointerup', (e) => { if (moving && e.pointerId === moving.id) { moving = null; store.set(CURRENT, current()); e.stopPropagation(); } }, true);
 
 // start from what you were last looking at
 const last = store.get(CURRENT, null);

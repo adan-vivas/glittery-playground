@@ -358,7 +358,7 @@ import * as THREE from 'three';
   // and unfolds in the air, held facing you; once flat, the DOM letter lays its crisp text and real button over the sheet.
   // Closing crumples it where it hangs, and it drops onto the table below. PAPER holds the physical numbers; the scene lab
   // (?lab) changes them, and the camera, live.
-  const PAPER = { radius: 0.012, hold: 0.12, sheet: 0.1, gravity: 4.5, friction: 0.3, drag: 3, bounce: 0.22, lift: 0.025, fill: 1.1, key: 1, front: 1.9 };
+  const PAPER = { radius: 0.012, hold: 0.12, sheet: 0.1, gravity: 4.5, friction: 0.3, drag: 3, air: 0.6, bounce: 0.22, lift: 0.025, throw: 1, toss: 0.8, fill: 1.1, key: 1, front: 1.9 };
   const letter = $('letter'), sheetEl = letter.querySelector('.paper'), ballBtn = $('ball'), ballcap = $('ballcap');
   const GX = 36, GY = 50, NV = (GX + 1) * (GY + 1);
   const h2 = (x, y) => { const n = Math.sin(x * 127.1 + y * 311.7) * 43758.5453; return n - Math.floor(n); };
@@ -464,19 +464,13 @@ import * as THREE from 'three';
   const B = { p: V3(), v: V3(), q: qrand(), w: V3(), ph: 0, sq: 0, sqv: 0, n: V3(0, 1, 0), lift: 0, lv: 0, sx: -999, sy: -999, rpx: 20 };
   const SP = { t: 0, tv: 0, c: 1, cv: 0, h: 0, hv: 0, q: QI, spin: 0 };   // t: travel to the held place; c: how crumpled (1 = ball); h: height of the centre
   let pmode = 'ball', hov = false, grab = null, from = V3(), qFrom = QI, L = { x: 0, y: 0 }, held = V3(), placed = false, paperOn = false;
-  let ov, oscene, sun, hemi, roomLight, paperMesh, shadowTwin, geo, contact;
+  let ov, oscene, occRig, sun, hemi, roomLight, paperMesh, shadowTwin, geo, contact;
   const R = V3(), D = V3(), N = V3();                                  // the camera's right, down and toward-you: the held sheet's axes
   const TOP = 0.026;                                                   // the projector's top surface
 
   function home() { const vw = innerWidth, vh = innerHeight; return vw < 600 ? [57, vh - (vw < 360 ? 136 : 88)] : [Math.min(vw / 2 + Math.min(vw * .31, 360) + 44, vw - 150), Math.max(455, vh * .6 + 35)]; }
-  // The projector's footprint, a rounded rectangle on the table: signed distance and outward normal at (x, z).
-  function devSDF(x, z) {
-    const b = device.deviceBox; if (!b) return { d: 9, nx: 0, nz: 0 };
-    const rad = .012, cx = (b.min.x + b.max.x) / 2, cz = (b.min.z + b.max.z) / 2, hx = (b.max.x - b.min.x) / 2 - rad, hz = (b.max.z - b.min.z) / 2 - rad;
-    const px = x - cx, pz = z - cz, qx = Math.abs(px) - hx, qz = Math.abs(pz) - hz;
-    if (qx > 0 && qz > 0) { const l = Math.hypot(qx, qz); return { d: l - rad, nx: Math.sign(px) * qx / l, nz: Math.sign(pz) * qz / l }; }
-    return qx > qz ? { d: qx - rad, nx: Math.sign(px), nz: 0 } : { d: qz - rad, nx: 0, nz: Math.sign(pz) };
-  }
+  // The projector's footprint wherever it stands, and the table's height under a point: its top inside the footprint.
+  const devSDF = (x, z) => device.footprintSDF(x, z);
   const groundAt = (x, z) => devSDF(x, z).d < 0 ? TOP : 0;
   // Where the ball may roll: inside the room, and inside what the screen shows of the table.
   function viewLines(r) {
@@ -506,10 +500,10 @@ import * as THREE from 'three';
     return vn;
   }
   function collide() {
-    const r = PAPER.radius, rm = device.getScene().room, hw = rm.width / 2 - r, hd = rm.depth / 2 - r;
-    if (B.p.x < -hw) impact(1, 0, -hw - B.p.x); if (B.p.x > hw) impact(-1, 0, B.p.x - hw);
-    if (B.p.z < -hd) impact(0, 1, -hd - B.p.z); if (B.p.z > hd) impact(0, -1, B.p.z - hd);
-    for (const e of viewLines(r)) { const d = (B.p.x - e.px) * e.nx + (B.p.z - e.pz) * e.nz; if (d < r) impact(e.nx, e.nz, r - d); }
+    const r = PAPER.radius, low = B.p.y < groundAt(B.p.x, B.p.z) + r + .02;
+    const room = device.getScene().room;
+    if (room.walls) { const s = device.roomSDF(B.p.x, B.p.z); if (s.d > -r) impact(s.nx, s.nz, s.d + r); }   // the foot of the cove
+    if (low) for (const e of viewLines(r)) { const d = (B.p.x - e.px) * e.nx + (B.p.z - e.pz) * e.nz; if (d < r) impact(e.nx, e.nz, r - d); }   // on the table, it stays in view
     if (B.p.y - r < TOP - .002) {                                      // beside the projector, not on top of it
       const s = devSDF(B.p.x, B.p.z); if (s.d < r) { const vn = impact(s.nx, s.nz, r - s.d); if (vn > .06) sfx.thud(vn / .7); }
     }
@@ -517,21 +511,28 @@ import * as THREE from 'three';
 
   function physics(dt) {
     const r = PAPER.radius, g = PAPER.gravity;
-    if (grab && grab.moved) {                                          // held: it follows the hand across the table, and remembers how fast
-      const hit = device.floorRay(grab.x, grab.y, groundAt(B.p.x, B.p.z) + r);
-      if (hit) {
-        const px = B.p.x, pz = B.p.z; B.p.x = hit.x; B.p.z = hit.z;
-        B.v.x = B.v.x * .4 + (B.p.x - px) / Math.max(dt, .001) * .6; B.v.z = B.v.z * .4 + (B.p.z - pz) / Math.max(dt, .001) * .6;
+    if (grab && grab.moved) {                                          // held: it follows the hand, up into the air and across the table
+      const tgt = holdTarget(grab.x, grab.y);
+      if (tgt) {
+        const prev = B.p.clone(), f = 1 - Math.exp(-dt * 28);          // a hand's slight lag, so it has weight
+        B.p.lerp(tgt, f);
+        const inst = B.p.clone().sub(prev).divideScalar(Math.max(dt, .001));
+        B.v.lerp(inst, .5);
+        grab.hist.push([B.p.clone(), performance.now()]); if (grab.hist.length > 16) grab.hist.shift();
       }
-      B.p.y = groundAt(B.p.x, B.p.z) + r; B.v.y = 0;
-      const vx = B.v.x, vz = B.v.z; collide(); B.v.x = vx; B.v.z = vz;   // it can't be pushed into a wall or the projector
-    } else if (!grab) {
-      // A paper ball is light and lumpy. It slides more than it rolls, the table and the air take its speed fast,
-      // it wobbles off a straight line, and it barely bounces: most of an impact goes into crushing the paper.
       const gr = groundAt(B.p.x, B.p.z) + r;
-      B.v.y -= g * dt; B.p.y += B.v.y * dt;
+      if (B.p.y < gr) B.p.y = gr;
+      const v = B.v.clone(); collide(); B.v.copy(v);                   // it can't be pushed through a wall or the projector
+    } else if (!grab) {
+      // A paper ball is light and lumpy. In the air the air slows it a little; on the table it slides more than it rolls,
+      // the table takes its speed fast, it wobbles off a straight line, and it barely bounces.
+      const gr = groundAt(B.p.x, B.p.z) + r;
+      B.v.y -= g * dt;
+      if (B.p.y > gr + 1e-3) B.v.multiplyScalar(Math.exp(-PAPER.air * dt));
+      B.p.y += B.v.y * dt;
       if (B.p.y <= gr) {
         if (B.v.y < -.12) { const vn = -B.v.y; B.v.y = vn * PAPER.bounce; B.n.set(0, 1, 0); B.sq = Math.min(.3, vn / 2); B.sqv = 0;
+          B.v.x *= .8; B.v.z *= .8;                                    // a landing scrubs off some speed
           const k = vn / r * .5; B.w.x += (Math.random() - .5) * k; B.w.z += (Math.random() - .5) * k; sfx.paperHit(vn / 1.4); if (vn > .5) sfx.thud(vn / 3); }
         else B.v.y = 0;
         B.p.y = gr;
@@ -539,7 +540,7 @@ import * as THREE from 'three';
       if (B.p.y <= gr + 1e-4) {
         const sp = Math.hypot(B.v.x, B.v.z);
         if (sp > 0) {
-          const ns = Math.max(0, sp - (PAPER.friction + PAPER.drag * sp * sp) * dt);   // sliding friction plus air drag
+          const ns = Math.max(0, sp - (PAPER.friction + PAPER.drag * sp * sp) * dt);   // sliding friction plus drag
           const wob = Math.sin(B.ph * 1.7) * sp * .55 * dt;                            // lopsided: it drifts sideways as it tumbles
           const vx0 = B.v.x, vz0 = B.v.z; B.v.x = (vx0 * ns - vz0 * wob) / sp; B.v.z = (vz0 * ns + vx0 * wob) / sp;
           if (ns === 0) B.v.x = B.v.z = 0;
@@ -555,7 +556,23 @@ import * as THREE from 'three';
     const wl = B.w.length();
     if (wl * dt > 1e-5 && !reduce) B.q = qnorm(qmul(qax(B.w.x / wl, B.w.y / wl, B.w.z / wl, wl * dt), B.q));
     [B.sq, B.sqv] = spring(B.sq, B.sqv, 0, 520, 15, dt);
-    [B.lift, B.lv] = spring(B.lift, B.lv, grab && grab.moved ? PAPER.lift : hov ? .003 : 0, 320, 18, dt);
+    [B.lift, B.lv] = spring(B.lift, B.lv, hov && !grab ? .003 : 0, 320, 18, dt);
+  }
+
+  // Holding: the ball follows the pointer on an upright plane through it, square to where you look, so moving up lifts it
+  // and moving sideways carries it. Below the table the plane gives way to the table itself, so moving down brings it back
+  // toward you along the table. It never sinks into the table, rises past the room, or goes through the projector.
+  function holdTarget(x, y) {
+    const cam = device.camera, rc = device.getBoundingClientRect(), r = PAPER.radius;
+    const ray = new THREE.Raycaster(); ray.setFromCamera(new THREE.Vector2((x - rc.left) / rc.width * 2 - 1, -(y - rc.top) / rc.height * 2 + 1), cam);
+    const fwd = cam.getWorldDirection(V3()).setY(0); if (fwd.lengthSq() < 1e-6) fwd.set(0, 0, -1); fwd.normalize();
+    const plane = new THREE.Plane().setFromNormalAndCoplanarPoint(fwd, grab.anchor), hit = V3();
+    if (!ray.ray.intersectPlane(plane, hit)) return null;
+    hit.add(grab.off);
+    const floorY = groundAt(hit.x, hit.z) + r + PAPER.lift;
+    if (hit.y < floorY) { const f = device.floorRay(x, y, floorY); if (f) { f.x += grab.off.x; f.z += grab.off.z; hit.copy(f); grab.anchor.copy(f); } hit.y = floorY; }
+    hit.y = Math.min(hit.y, .9);
+    return hit;
   }
 
   // The mesh: a ball (rotated by q) blended into a flat sheet held in the camera's axes, k at a time, region by region.
@@ -648,9 +665,9 @@ import * as THREE from 'three';
   function peelTo(c) { if (c) { if (PE.p < .02 || PE.side !== c) { PE.cu = c === 'tl' ? 0 : 1; PE.cv = 0; } if (PE.side !== c) sfx.rustle(.07, .35); PE.side = c; PE.to = 1; } else { PE.to = 0; PE.side = null; } }
   // Landing is handed to the ball's own physics, falling at the speed it reached: it thuds, hops and skids.
   function finishClose() {
-    const rm = device.getScene().room, r = PAPER.radius;
+    const r = PAPER.radius;
     pmode = 'ball';
-    B.p.set(clamp(held.x, -rm.width / 2 + r, rm.width / 2 - r), Math.max(SP.h, groundAt(held.x, held.z) + r), clamp(held.z, -rm.depth / 2 + r, rm.depth / 2 - r));
+    B.p.set(held.x, Math.max(SP.h, groundAt(held.x, held.z) + r), held.z);
     B.v.set((Math.random() - .5) * .08, Math.min(0, SP.hv), (Math.random() - .5) * .08); B.q = SP.q; B.lift = 0; B.lv = 0;
     SP.t = 0; SP.c = 1; PE.p = PE.v = PE.to = 0; PE.side = null; repoint(); if (refocus) { refocus = false; ballBtn.focus({ preventScroll: true }); }
   }
@@ -670,7 +687,8 @@ import * as THREE from 'three';
     roomLight = new THREE.DirectionalLight(0xfffdf8, 1);
     oscene.add(sun, sun.target, hemi, roomLight, roomLight.target);
     const occ = device.deviceRoot.clone(true), hide = new THREE.MeshBasicMaterial({ colorWrite: false });
-    occ.traverse(o => { if (o.isMesh) o.material = hide; }); oscene.add(occ);
+    occ.traverse(o => { if (o.isMesh) o.material = hide; });
+    occRig = new THREE.Group(); occRig.matrixAutoUpdate = false; occRig.add(occ); oscene.add(occRig);
     geo = new THREE.BufferGeometry();
     geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(NV * 3), 3).setUsage(THREE.DynamicDrawUsage));
     geo.setAttribute('color', new THREE.BufferAttribute(new Float32Array(NV * 3), 3).setUsage(THREE.DynamicDrawUsage));
@@ -746,7 +764,8 @@ import * as THREE from 'three';
       ballBtn.style.transform = `translate(${s.x - 32}px, ${s.y - 32}px)`;
       ballcap.style.transform = `translate(${s.x - ballcap.offsetWidth / 2}px, ${s.y + B.rpx + 10}px)`; ballcap.style.opacity = '1';
     }
-    // the paper's own canvas: the projector's camera and light
+    // the paper's own canvas: the projector's camera and light, and its stand-in wherever the projector stands
+    occRig.matrix.copy(device.rig.matrixWorld); occRig.matrixWorldNeedsUpdate = true;
     const k = device.keyLight; sun.position.copy(k.position); sun.target.position.copy(k.target.position); sun.intensity = k.intensity * PAPER.key; hemi.intensity = PAPER.fill;
     roomLight.position.copy(cam.position).addScaledVector(V3(0, 1, 0), .3); roomLight.target.position.copy(C); roomLight.intensity = PAPER.front;
     const w = innerWidth, hh = innerHeight; if (ov.domElement.width !== Math.round(w * ov.getPixelRatio()) || ov.domElement.height !== Math.round(hh * ov.getPixelRatio())) ov.setSize(w, hh, false);
@@ -754,26 +773,39 @@ import * as THREE from 'three';
     window.__paperState = { pmode, p: C.toArray().map(v => +v.toFixed(4)), held: held.toArray().map(v => +v.toFixed(4)) };
   }
 
-  // Hold to drag, release to throw, a short press opens. The ball's own button handles the keyboard.
+  // Hold to pick up, move to lift and carry, let go to throw; a short press opens. The ball's own button handles the keyboard.
   addEventListener('pointerdown', e => {
     const corner = e.button === 0 && cornerAt(e.clientX, e.clientY);
     if (corner) { e.preventDefault(); e.stopPropagation(); swallow = true; close(corner); return; }
     if (e.button !== 0 || !ballHit(e.clientX, e.clientY)) return;
-    grab = { id: e.pointerId, sx: e.clientX, sy: e.clientY, x: e.clientX, y: e.clientY, moved: false };
-    B.v.set(0, 0, 0); e.preventDefault(); e.stopPropagation(); sfx.rustle(.08, .5);   // the device under the ball does not orbit
+    B.p.y += B.lift; B.lift = 0;
+    grab = { id: e.pointerId, sx: e.clientX, sy: e.clientY, x: e.clientX, y: e.clientY, moved: false, hist: [], anchor: B.p.clone(), off: V3() };
+    // where the pointer meets the hold plane, relative to the ball: holding it by that spot, it doesn't jump to the cursor
+    const cam = device.camera, rc = device.getBoundingClientRect(), ray = new THREE.Raycaster();
+    ray.setFromCamera(new THREE.Vector2((e.clientX - rc.left) / rc.width * 2 - 1, -(e.clientY - rc.top) / rc.height * 2 + 1), cam);
+    const fwd = cam.getWorldDirection(V3()).setY(0).normalize(), hit = V3();
+    if (ray.ray.intersectPlane(new THREE.Plane().setFromNormalAndCoplanarPoint(fwd, B.p), hit)) grab.off.subVectors(B.p, hit).setY(0);
+    B.v.set(0, 0, 0); e.preventDefault(); e.stopPropagation(); sfx.rustle(.08, .5);   // the device under the ball does not react
   }, true);
   addEventListener('pointermove', e => {
     if (!grab || e.pointerId !== grab.id) return;
     grab.x = e.clientX; grab.y = e.clientY;
-    if (!grab.moved && Math.hypot(grab.x - grab.sx, grab.y - grab.sy) > 5) grab.moved = true;
+    if (!grab.moved && Math.hypot(grab.x - grab.sx, grab.y - grab.sy) > 5) { grab.moved = true; sfx.rustle(.1, .6); }
   }, true);
   addEventListener('pointerup', e => {
     if (!grab || e.pointerId !== grab.id) return;
     const g = grab; grab = null; swallow = true;
     if (!g.moved) open();
-    else {                                                                 // thrown: it keeps the speed it was carried at, up to a firm flick
-      B.p.y += B.lift; B.lift = 0;
-      const sp = Math.hypot(B.v.x, B.v.z), cap = 1.2; if (sp > cap) { B.v.x *= cap / sp; B.v.z *= cap / sp; } if (sp > .12) sfx.rustle(.06, .4);
+    else {                                                                 // thrown: the hand's speed over its last ~90ms
+      const now = performance.now(), h = g.hist.filter(([, t]) => now - t < 110);
+      const v = h.length > 1 ? h[h.length - 1][0].clone().sub(h[0][0]).divideScalar(Math.max(.016, (h[h.length - 1][1] - h[0][1]) / 1000)) : V3();
+      v.multiplyScalar(PAPER.throw);
+      // a flick upward is a toss: it also carries the ball away from you, into the scene
+      const fwd = device.camera.getWorldDirection(V3()).setY(0).normalize();
+      if (v.y > 0) v.addScaledVector(fwd, v.y * PAPER.toss);
+      const sp = v.length(), cap = 3.2; if (sp > cap) v.multiplyScalar(cap / sp);
+      B.v.copy(v); if (sp > .25) sfx.rustle(.06, .4);
+      window.__lastThrow = { v: v.toArray().map(n => +n.toFixed(2)), samples: h.length };   // the scene lab shows it
     }
   }, true);
   addEventListener('pointercancel', () => { grab = null; }, true);

@@ -52,13 +52,16 @@ const TABLE_RADIUS = 0.07;
 //   light   azimuth: where it stands on the table, in degrees from "behind the scene" (the top of the screen) toward
 //           the left of the screen, so it stays put on screen as the camera turns; elevation in degrees; intensity;
 //           shadow softness (filter radius), opacity, area (half-size of the shadow map in metres), map size
-//   room    the table is the floor of a box this wide and deep (metres, centred on the device) whose walls are shaded
-//           `shade` darker than the table, with `corner` of soft darkening where wall meets floor. Walls between the
-//           camera and the scene are cut away, like a dollhouse.
+//   device  where the projector stands on the table: x and z in metres from the middle of the room, rotation in degrees
+//   room    the table is the floor of a room this wide and deep (metres). It has no hard edges: the floor sweeps up into the
+//           walls along a cove of radius `cove`, and the walls meet each other around corners of radius `round`, like a
+//           photo studio. The walls get `shade` darker toward the top of the sweep, and `corner` darkens the bend softly.
+//           The parts of the room between the camera and the scene are cut away, like a dollhouse.
 const TABLE_SCENE = {
-  camera: { elevation: 50, azimuth: 40, fov: 22, x: null, y: null, scale: null },
+  camera: { elevation: 32, azimuth: 39, fov: 55, x: null, y: null, scale: 0.16 },
   light: { azimuth: 56, elevation: 43, intensity: 1.35, softness: 16, opacity: 0.22, area: 0.45, mapSize: 1024 },
-  room: { walls: true, width: 2.4, depth: 2, shade: 0.07, corner: 0.35 },
+  device: { x: 0, z: 0, rotation: 0 },
+  room: { walls: true, width: 2.4, depth: 2, shade: 0, corner: 0.05, cove: 0.3, round: 0.35 },
 };
 const clone = (o) => JSON.parse(JSON.stringify(o));
 
@@ -471,6 +474,8 @@ class TemporalProjector extends HTMLElement {
     scene.add(key, key.target);
 
     this.keyLight = key;
+    this.rig = new THREE.Group();   // the projector and everything it carries: placed on the table as one
+    scene.add(this.rig);
     this.tickers = new Set();   // functions called every frame with dt, before the scene is drawn
     if (this.table) {
       this.sceneCfg = clone(TABLE_SCENE);
@@ -501,7 +506,7 @@ class TemporalProjector extends HTMLElement {
       new THREE.MeshBasicMaterial({ map: shadowTex, transparent: true, depthWrite: false, toneMapped: false }));
     shadow.rotation.x = -Math.PI / 2;
     shadow.renderOrder = -1;
-    scene.add(shadow);
+    this.rig.add(shadow);
 
     // device
     const M = this.M = makeMaterials();
@@ -513,9 +518,10 @@ class TemporalProjector extends HTMLElement {
       o.castShadow = o.material !== M.coated_glass;
       o.receiveShadow = true;
     });
-    scene.add(device);
+    this.rig.add(device);
     this.deviceRoot = device;
-    this.deviceBox = new THREE.Box3().setFromObject(device);
+    this.localBox = new THREE.Box3().setFromObject(device);   // before placement: the projector's own extents
+    this._placeDevice();
     this.dial = device.getObjectByName('dial');
     this.key = device.getObjectByName('prf_key');
     this.powerBtn = device.getObjectByName('power_button');
@@ -530,7 +536,7 @@ class TemporalProjector extends HTMLElement {
         depthWrite: false, transparent: true }));
       s.scale.setScalar(scale);
       s.position.copy(pos);
-      scene.add(s);
+      this.rig.add(s);
       return s;
     };
     this.ledGlow = sprite(0x3dff6a, 0.0042, LED_P);
@@ -548,7 +554,7 @@ class TemporalProjector extends HTMLElement {
         blending: THREE.AdditiveBlending, color: new THREE.Color(1.0, 0.86, 0.68), opacity: 0.6 }));
     this.proj.rotation.x = -Math.PI / 2;
     this.proj.position.copy(PROJ_P);
-    scene.add(this.proj);
+    this.rig.add(this.proj);
 
     this._buildHologram(scene);
     this.lensGlow = sprite(0x6f8cff, 0.03, HOLO.lens);
@@ -638,6 +644,7 @@ class TemporalProjector extends HTMLElement {
     Object.assign(key.shadow.camera, { left: -L.area, right: L.area, top: L.area, bottom: -L.area, near: 0.05, far: 2 });
     key.shadow.camera.updateProjectionMatrix();
     this.floor.material.opacity = L.opacity;
+    this._placeDevice();
     this._buildRoom();
     this._footprint = null;
     if (this.renderer) this._resize();
@@ -657,38 +664,82 @@ class TemporalProjector extends HTMLElement {
   // Unit vector toward the light, in world space (for things the page draws itself).
   get lightDir() { return this.keyLight.position.clone().sub(this.keyLight.target.position).normalize(); }
 
-  // The room: four walls with inward faces, one-sided, so the ones between the camera and the device vanish.
+  _placeDevice() {
+    const d = this.sceneCfg?.device;
+    if (!d || !this.rig) return;
+    this.rig.position.set(d.x, 0, d.z);
+    this.rig.rotation.y = THREE.MathUtils.degToRad(d.rotation);
+    this.rig.updateMatrixWorld(true);
+    if (this.deviceRoot) this.deviceBox = new THREE.Box3().setFromObject(this.deviceRoot);
+    this._footprint = null;
+  }
+
+  // The projector's footprint on the table, a rounded rectangle wherever it stands: signed distance (metres, negative inside)
+  // and the outward normal at the table point (x, z), in world space.
+  footprintSDF(x, z) {
+    const b = this.localBox; if (!b) return { d: 9, nx: 0, nz: 0 };
+    const p = this.rig.worldToLocal(new THREE.Vector3(x, 0, z)), rad = 0.012;
+    const cx = (b.min.x + b.max.x) / 2, cz = (b.min.z + b.max.z) / 2, hx = (b.max.x - b.min.x) / 2 - rad, hz = (b.max.z - b.min.z) / 2 - rad;
+    const px = p.x - cx, pz = p.z - cz, qx = Math.abs(px) - hx, qz = Math.abs(pz) - hz;
+    let d, nx, nz;
+    if (qx > 0 && qz > 0) { const l = Math.hypot(qx, qz); d = l - rad; nx = Math.sign(px) * qx / l; nz = Math.sign(pz) * qz / l; }
+    else if (qx > qz) { d = qx - rad; nx = Math.sign(px); nz = 0; } else { d = qz - rad; nx = 0; nz = Math.sign(pz); }
+    const n = new THREE.Vector3(nx, 0, nz).applyQuaternion(this.rig.quaternion);
+    return { d, nx: n.x, nz: n.z };
+  }
+  // The room's floor, inside the foot of the cove: signed distance from its edge (negative inside) and the inward normal.
+  roomSDF(x, z) {
+    const R = this.sceneCfg.room, rc = Math.min(R.round, R.width / 2 - R.cove, R.depth / 2 - R.cove);
+    const hx = R.width / 2 - R.cove - rc, hz = R.depth / 2 - R.cove - rc, qx = Math.abs(x) - hx, qz = Math.abs(z) - hz;
+    let d, nx, nz;
+    if (qx > 0 && qz > 0) { const l = Math.hypot(qx, qz); d = l - rc; nx = -Math.sign(x) * qx / l; nz = -Math.sign(z) * qz / l; }
+    else if (qx > qz) { d = qx - rc; nx = -Math.sign(x); nz = 0; } else { d = qz - rc; nx = 0; nz = -Math.sign(z); }
+    return { d, nx, nz };
+  }
+
+  // The room: one smooth surface. Around the floor runs a rounded rectangle; from it the surface sweeps up a quarter circle
+  // (the cove) and rises as a wall. Faces point into the room and are one-sided, so whatever is between the camera and the
+  // scene is cut away. Drawn flat in the table's own colour, with a soft darkening in the bend and up the wall, and a twin
+  // that catches shadows.
   _buildRoom() {
     const R = this.sceneCfg.room, g = this.room;
-    g.children.slice().forEach((o) => { g.remove(o); o.geometry?.dispose(); o.material?.map?.dispose(); o.material?.dispose(); });
+    g.children.slice().forEach((o) => { g.remove(o); o.geometry?.dispose(); o.material?.dispose(); });
     g.visible = !!R.walls;
+    this.floor.scale.set(1, 1, 1);
     if (!R.walls) return;
     const page = new THREE.Color(getComputedStyle(this).getPropertyValue('--table-color').trim() || '#e8e7ee');
-    const wall = page.clone().multiplyScalar(1 - R.shade), top = page.clone().multiplyScalar(1 - R.shade * 0.35);
-    const H = 1.2, hw = R.width / 2, hd = R.depth / 2;
-    const face = gradientTexture([[0, '#' + top.getHexString()], [1, '#' + wall.getHexString()]]);
-    const ao = gradientTexture([[0, `rgba(20,18,34,${R.corner})`], [1, 'rgba(20,18,34,0)']]);
-    // [position, rotation y, length]
-    const walls = [
-      [new THREE.Vector3(0, H / 2, -hd), 0, R.width],            // back
-      [new THREE.Vector3(0, H / 2, hd), Math.PI, R.width],       // front
-      [new THREE.Vector3(-hw, H / 2, 0), Math.PI / 2, R.depth],  // left
-      [new THREE.Vector3(hw, H / 2, 0), -Math.PI / 2, R.depth],  // right
-    ];
-    for (const [pos, ry, len] of walls) {
-      const w = new THREE.Group();
-      w.position.copy(pos); w.rotation.y = ry;
-      const m = new THREE.Mesh(new THREE.PlaneGeometry(len, H), new THREE.MeshBasicMaterial({ map: face, toneMapped: false }));
-      const sh = new THREE.Mesh(new THREE.PlaneGeometry(len, H), new THREE.ShadowMaterial({ color: 0x1c1a2e, opacity: this.sceneCfg.light.opacity }));
-      sh.position.z = 0.0005; sh.receiveShadow = true;
-      // soft darkening where wall meets table: a strip up the wall and one along the floor
-      const up = new THREE.Mesh(new THREE.PlaneGeometry(len, 0.08), new THREE.MeshBasicMaterial({ map: ao, transparent: true, depthWrite: false, toneMapped: false }));
-      up.rotation.z = Math.PI; up.position.set(0, -H / 2 + 0.04, 0.001);
-      const flat = new THREE.Mesh(new THREE.PlaneGeometry(len, 0.08), new THREE.MeshBasicMaterial({ map: ao, transparent: true, depthWrite: false, toneMapped: false }));
-      flat.rotation.x = -Math.PI / 2; flat.rotation.z = Math.PI; flat.position.set(0, -H / 2 + 0.0004, 0.04);
-      w.add(m, sh, up, flat);
-      g.add(w);
+    const H = 1.6, cv = Math.max(0.01, R.cove), rc = Math.max(0.01, Math.min(R.round, R.width / 2 - cv, R.depth / 2 - cv));
+    const hx = R.width / 2 - cv - rc, hz = R.depth / 2 - cv - rc;
+    // the path: a rounded rectangle at the foot of the cove, as points with outward normals
+    const path = [], seg = 14, straight = (a, b, n, k) => { for (let i = 0; i < k; i++) path.push([a[0] + (b[0] - a[0]) * i / k, a[1] + (b[1] - a[1]) * i / k, n[0], n[1]]); };
+    const arc = (cx, cz, a0) => { for (let i = 0; i < seg; i++) { const a = a0 + i / seg * Math.PI / 2; path.push([cx + Math.cos(a) * rc, cz + Math.sin(a) * rc, Math.cos(a), Math.sin(a)]); } };
+    const sx = Math.max(2, Math.round(hx * 2 / 0.1)), sz = Math.max(2, Math.round(hz * 2 / 0.1));
+    straight([hx + rc, -hz], [hx + rc, hz], [1, 0], sz); arc(hx, hz, 0);
+    straight([hx, hz + rc], [-hx, hz + rc], [0, 1], sx); arc(-hx, hz, Math.PI / 2);
+    straight([-hx - rc, hz], [-hx - rc, -hz], [-1, 0], sz); arc(-hx, -hz, Math.PI);
+    straight([-hx, -hz - rc], [hx, -hz - rc], [0, -1], sx); arc(hx, -hz, Math.PI * 1.5);
+    // the profile: a quarter circle up the cove, then straight up the wall
+    const prof = [];
+    for (let i = 0; i <= 16; i++) { const a = i / 16 * Math.PI / 2; prof.push([Math.sin(a) * cv, (1 - Math.cos(a)) * cv, a]); }
+    prof.push([cv, H, Math.PI / 2]);
+    const P = path.length, Q = prof.length, pos = new Float32Array(P * Q * 3), col = new Float32Array(P * Q * 3), idx = [];
+    for (let i = 0; i < P; i++) for (let j = 0; j < Q; j++) {
+      const [px, pz, nx, nz] = path[i], [off, y, a] = prof[j], k = (i * Q + j) * 3;
+      pos[k] = px + nx * off; pos[k + 1] = y; pos[k + 2] = pz + nz * off;
+      const up = Math.min(1, y / (cv + 0.4)), bend = Math.sin(a * 2) ** 2;    // up the wall; strongest mid-bend, zero on floor and wall
+      const c = page.clone().multiplyScalar((1 - R.shade * up * up) * (1 - R.corner * bend));
+      col[k] = c.r; col[k + 1] = c.g; col[k + 2] = c.b;
     }
+    for (let i = 0; i < P; i++) { const i2 = (i + 1) % P; for (let j = 0; j < Q - 1; j++) { const a = i * Q + j, b = i2 * Q + j, c = a + 1, d = b + 1; idx.push(a, b, c, b, d, c); } }
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.BufferAttribute(pos, 3)); geo.setAttribute('color', new THREE.BufferAttribute(col, 3)); geo.setIndex(idx);
+    geo.computeVertexNormals();
+    const surface = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ vertexColors: true, toneMapped: false }));
+    const catcher = new THREE.Mesh(geo, new THREE.ShadowMaterial({ color: 0x1c1a2e, opacity: this.sceneCfg.light.opacity, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -1 }));
+    catcher.receiveShadow = true;
+    // the shadow catcher on the floor must not show past the foot of the cove, or under the bend it would double up
+    this.floor.scale.set(Math.max(0.01, (R.width - 2 * cv) / 6), Math.max(0.01, (R.depth - 2 * cv) / 6), 1);
+    g.add(surface, catcher);
   }
 
   // The visible table: where the screen's edges meet the floor, as rays from the camera. For pages that keep things in view.
@@ -745,6 +796,7 @@ class TemporalProjector extends HTMLElement {
     };
     const pointerAngle = () => {
       if (!ray.ray.intersectPlane(dialPlane, hitPoint)) return null;
+      this.rig.worldToLocal(hitPoint);
       return THREE.MathUtils.radToDeg(Math.atan2(-(hitPoint.z - DIAL_C.z), hitPoint.x - DIAL_C.x));
     };
 
@@ -862,8 +914,8 @@ class TemporalProjector extends HTMLElement {
     if (!this.renderer) return null;
     const v = new THREE.Vector3(), obj = { power: this.powerBtn, key: this.key, dial: this.dial }[name];
     if (obj) new THREE.Box3().setFromObject(obj).getCenter(v);
-    else if (name === 'lens') v.copy(HOLO.lens);
-    else if (name === 'hologram') v.copy(HOLO.lens).add(new THREE.Vector3(0, HOLO.gap + HOLO.h / 2, 0));
+    else if (name === 'lens') this.rig.localToWorld(v.copy(HOLO.lens));
+    else if (name === 'hologram') this.rig.localToWorld(v.copy(HOLO.lens).add(new THREE.Vector3(0, HOLO.gap + HOLO.h / 2, 0)));
     else return null;
     v.project(this.camera);
     const r = this.getBoundingClientRect();
@@ -919,7 +971,7 @@ class TemporalProjector extends HTMLElement {
   _buildHologram(scene) {
     const group = new THREE.Group();
     group.position.copy(HOLO.lens);
-    scene.add(group);
+    this.rig.add(group);
     const blend = { transparent: true, depthWrite: false, blending: THREE.NormalBlending };
 
     // the year, drawn white on black: the fallback image when a date has no picture
@@ -1029,7 +1081,7 @@ class TemporalProjector extends HTMLElement {
     const t = reduceMotion ? 0 : now / 1000;
     // the image turns to face the camera around its vertical axis
     const cam = this.camera.position;
-    if (this.table) h.image.quaternion.copy(this.camera.quaternion);   // a fixed view: face the camera squarely
+    if (this.table) h.image.quaternion.copy(this.rig.quaternion).invert().multiply(this.camera.quaternion);   // a fixed view: face the camera squarely
     else h.image.rotation.y = Math.atan2(cam.x - HOLO.lens.x, cam.z - HOLO.lens.z);
     if (h.b) {
       const m = Math.min(1, (now - h.mixStart) / (reduceMotion ? 1 : 520));
@@ -1050,8 +1102,8 @@ class TemporalProjector extends HTMLElement {
     u.uGlitch.value = reduceMotion ? 0 : this.glitch;
     u.uAlpha.value = Math.min(1, k * 2.5) * flicker;
     // dither cell: about 95 rows across the image, so a small hologram keeps its face; never finer than 1.5 CSS px
-    const top = HOLO.lens.clone().setY(HOLO.lens.y + HOLO.top).project(this.camera);
-    const bottom = HOLO.lens.clone().setY(HOLO.lens.y + HOLO.gap).project(this.camera);
+    const top = this.rig.localToWorld(HOLO.lens.clone().setY(HOLO.lens.y + HOLO.top)).project(this.camera);
+    const bottom = this.rig.localToWorld(HOLO.lens.clone().setY(HOLO.lens.y + HOLO.gap)).project(this.camera);
     const imgPx = Math.abs(top.y - bottom.y) / 2 * this.clientHeight;
     u.uCell.value = THREE.MathUtils.clamp(imgPx / 95, 1.5, 2.8) * this.renderer.getPixelRatio();
     bu.uGrow.value = grow;
@@ -1075,7 +1127,7 @@ class TemporalProjector extends HTMLElement {
       cap.querySelector('span').textContent = label;
     }
     cap.classList.toggle('future', !!future);
-    const p = HOLO.lens.clone().add(new THREE.Vector3(0, HOLO.top + 0.004, 0)).project(this.camera);
+    const p = this.rig.localToWorld(HOLO.lens.clone().add(new THREE.Vector3(0, HOLO.top + 0.004, 0))).project(this.camera);
     cap.style.transform = `translate(${((p.x + 1) / 2 * this.clientWidth).toFixed(1)}px, ${((1 - p.y) / 2 * this.clientHeight).toFixed(1)}px)`;
     cap.style.opacity = label ? String(reveal * reveal * flicker) : '0';
   }
