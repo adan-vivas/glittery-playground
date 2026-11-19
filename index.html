@@ -471,7 +471,8 @@ import * as THREE from 'three';
   function home() { const vw = innerWidth, vh = innerHeight; return vw < 600 ? [57, vh - (vw < 360 ? 136 : 88)] : [Math.min(vw / 2 + Math.min(vw * .31, 360) + 44, vw - 150), Math.max(455, vh * .6 + 35)]; }
   // The projector's footprint wherever it stands, and the table's height under a point: its top inside the footprint.
   const devSDF = (x, z) => device.footprintSDF(x, z);
-  const groundAt = (x, z) => devSDF(x, z).d < 0 ? TOP : 0;
+  const rigY = () => device.rig ? device.rig.position.y : 0;
+  const groundAt = (x, z) => rigY() < .005 && devSDF(x, z).d < 0 ? TOP : 0;   // on top of the projector only while it stands on the table
   // Where the ball may roll: inside the room, and inside what the screen shows of the table.
   function viewLines(r) {
     const vw = innerWidth, vh = innerHeight, m = 6, mid = device.floorRay(vw / 2, vh * .75, r), out = [];
@@ -504,7 +505,7 @@ import * as THREE from 'three';
     const room = device.getScene().room;
     if (room.walls) { const s = device.roomSDF(B.p.x, B.p.z); if (s.d > -r) impact(s.nx, s.nz, s.d + r); }   // the foot of the cove
     if (low) for (const e of viewLines(r)) { const d = (B.p.x - e.px) * e.nx + (B.p.z - e.pz) * e.nz; if (d < r) impact(e.nx, e.nz, r - d); }   // on the table, it stays in view
-    if (B.p.y - r < TOP - .002) {                                      // beside the projector, not on top of it
+    if (B.p.y - r < rigY() + TOP - .002 && B.p.y + r > rigY()) {        // level with the projector, wherever it is held
       const s = devSDF(B.p.x, B.p.z);
       if (s.d < r) {
         const vn = impact(s.nx, s.nz, r - s.d); if (vn > .06) sfx.thud(vn / .7);
@@ -574,8 +575,10 @@ import * as THREE from 'three';
     const plane = new THREE.Plane().setFromNormalAndCoplanarPoint(fwd, grab.anchor), hit = V3();
     if (!ray.ray.intersectPlane(plane, hit)) return null;
     hit.add(grab.off);
+    // below the table line it moves on the table instead (the hand point at the height that keeps the ball at floorY),
+    // so it never jumps along your line of sight toward you
     const floorY = groundAt(hit.x, hit.z) + r + PAPER.lift;
-    if (hit.y < floorY) { const f = device.floorRay(x, y, floorY); if (f) { f.x += grab.off.x; f.z += grab.off.z; hit.copy(f); grab.anchor.copy(f); } hit.y = floorY; }
+    if (hit.y < floorY) { const f = device.floorRay(x, y, floorY - grab.off.y); if (f) { hit.copy(f).add(grab.off); grab.anchor.copy(hit); } hit.y = floorY; }
     hit.y = Math.min(hit.y, .9);
     return hit;
   }
@@ -731,7 +734,7 @@ import * as THREE from 'three';
       paperMesh.material.map = textTex;
       paperMesh.material.normalScale.setScalar(.45);
       shape(C, r, B.q, 1, 0, DL, 0, reduce ? 0 : B.sq);
-      showContact = clamp(1 - (C.y - groundAt(C.x, C.z) - r) / .006, 0, 1);
+      showContact = 1;
     } else if (pmode === 'opening' || pmode === 'closing') {
       ballcap.style.opacity = '0';
       const opening = pmode === 'opening';
@@ -752,7 +755,7 @@ import * as THREE from 'three';
       const wpp = sheetW / sheet.w, bow = 34 * wpp * Math.sin(Math.PI * (1 - c));
       paperMesh.material.map = textTex; paperMesh.material.normalScale.setScalar(.15 + .3 * c);
       shape(C, r, q, c, bow, opening ? DL : closeDL, opening ? 0 : PE.p * (1 - c));
-      showContact = clamp(1 - (C.y - groundAt(C.x, C.z) - r) / .006, 0, 1) * c;
+      showContact = ss((c - .4) / .5);
       if (opening && Math.abs(1 - SP.t) < .003 && Math.abs(SP.tv) < .03 && SP.c < .003 && Math.abs(SP.cv) < .03 && Math.abs(held.y - SP.h) < 1e-4 && Math.abs(SP.hv) < 1e-3) finishOpen();
       if (!opening && SP.h <= groundAt(C.x, C.z) + r) finishClose();
     } else {                                                               // open: the DOM letter's text lies over the blank sheet
@@ -761,8 +764,11 @@ import * as THREE from 'three';
       paperMesh.material.map = peeling ? textTex : blankTex; paperMesh.material.normalScale.setScalar(.15);
       C = held; shape(held, r, QI, 0, 0, DL, Math.max(0, PE.p));
     }
+    // Directly under the ball, always: tight and dark on the table, wider and fainter the higher it is. With the light's own
+    // cast shadow, it is what tells you a ball in the air is up, not nearer.
+    const air = Math.max(0, C.y - groundAt(C.x, C.z) - r);
     contact.visible = showContact > .01;
-    if (contact.visible) { contact.position.set(C.x, groundAt(C.x, C.z) + .0004, C.z); contact.scale.setScalar(r * 2.6); contact.material.opacity = .6 * showContact; }
+    if (contact.visible) { contact.position.set(C.x, groundAt(C.x, C.z) + .0004, C.z); contact.scale.setScalar(r * 2.6 * (1 + air * 9)); contact.material.opacity = .62 * showContact / (1 + air * 22); }
     if (pmode === 'ball') {
       const s = screenOf(C), e = screenOf(C.clone().addScaledVector(R, r));
       B.sx = s.x; B.sy = s.y; B.rpx = Math.max(6, Math.hypot(e.x - s.x, e.y - s.y));
@@ -789,7 +795,8 @@ import * as THREE from 'three';
     const cam = device.camera, rc = device.getBoundingClientRect(), ray = new THREE.Raycaster();
     ray.setFromCamera(new THREE.Vector2((e.clientX - rc.left) / rc.width * 2 - 1, -(e.clientY - rc.top) / rc.height * 2 + 1), cam);
     const fwd = cam.getWorldDirection(V3()).setY(0).normalize(), hit = V3();
-    if (ray.ray.intersectPlane(new THREE.Plane().setFromNormalAndCoplanarPoint(fwd, B.p), hit)) grab.off.subVectors(B.p, hit).setY(0);
+    // the ball rises straight up by PAPER.lift where it lay, and keeps that offset from the hand
+    if (ray.ray.intersectPlane(new THREE.Plane().setFromNormalAndCoplanarPoint(fwd, B.p), hit)) grab.off.set(B.p.x - hit.x, B.p.y + PAPER.lift - hit.y, B.p.z - hit.z);
     B.v.set(0, 0, 0); e.preventDefault(); e.stopPropagation(); sfx.rustle(.08, .5);   // the device under the ball does not react
   }, true);
   addEventListener('pointermove', e => {

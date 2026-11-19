@@ -61,7 +61,7 @@ const TABLE_SCENE = {
   camera: { elevation: 32, azimuth: 39, fov: 55, x: null, y: null, scale: 0.16 },
   light: { azimuth: 56, elevation: 43, intensity: 1.35, softness: 16, opacity: 0.22, area: 0.45, mapSize: 1024 },
   device: { x: 0, z: 0, rotation: 0 },
-  room: { walls: true, width: 2.4, depth: 2, shade: 0, corner: 0.05, cove: 0.3, round: 0.35 },
+  room: { walls: true, width: 1.3, depth: 1.05, shade: 0.12, corner: 0.1, cove: 0.1, round: 0.18 },
 };
 const clone = (o) => JSON.parse(JSON.stringify(o));
 
@@ -475,7 +475,8 @@ class TemporalProjector extends HTMLElement {
 
     this.keyLight = key;
     this.rig = new THREE.Group();   // the projector and everything it carries: placed on the table as one
-    scene.add(this.rig);
+    this.floorRig = new THREE.Group();   // what it leaves on the table: its contact shadow and the date it projects. Stays down when it is lifted.
+    scene.add(this.rig, this.floorRig);
     this.tickers = new Set();   // functions called every frame with dt, before the scene is drawn
     if (this.table) {
       this.sceneCfg = clone(TABLE_SCENE);
@@ -506,7 +507,8 @@ class TemporalProjector extends HTMLElement {
       new THREE.MeshBasicMaterial({ map: shadowTex, transparent: true, depthWrite: false, toneMapped: false }));
     shadow.rotation.x = -Math.PI / 2;
     shadow.renderOrder = -1;
-    this.rig.add(shadow);
+    this.bakedShadow = shadow;
+    this.floorRig.add(shadow);
 
     // device
     const M = this.M = makeMaterials();
@@ -554,7 +556,7 @@ class TemporalProjector extends HTMLElement {
         blending: THREE.AdditiveBlending, color: new THREE.Color(1.0, 0.86, 0.68), opacity: 0.6 }));
     this.proj.rotation.x = -Math.PI / 2;
     this.proj.position.copy(PROJ_P);
-    this.rig.add(this.proj);
+    this.floorRig.add(this.proj);
 
     this._buildHologram(scene);
     this.lensGlow = sprite(0x6f8cff, 0.03, HOLO.lens);
@@ -667,11 +669,61 @@ class TemporalProjector extends HTMLElement {
   _placeDevice() {
     const d = this.sceneCfg?.device;
     if (!d || !this.rig) return;
-    this.rig.position.set(d.x, 0, d.z);
+    this.rig.position.set(d.x, this.rig.position.y, d.z);
     this.rig.rotation.y = THREE.MathUtils.degToRad(d.rotation);
     this.rig.updateMatrixWorld(true);
+    this._syncFloorRig();
     if (this.deviceRoot) this.deviceBox = new THREE.Box3().setFromObject(this.deviceRoot);
     this._footprint = null;
+  }
+
+  _syncFloorRig() {
+    this.floorRig.position.set(this.rig.position.x, 0, this.rig.position.z);
+    this.floorRig.rotation.y = this.rig.rotation.y;
+    const up = this.rig.position.y;
+    if (this.bakedShadow) { this.bakedShadow.material.opacity = 1 / (1 + up * 60); this.bakedShadow.scale.setScalar(1 + up * 4); }
+  }
+
+  // Picked up, the projector follows the hand (with a little weight); let go, it falls, lands with a thud, and settles.
+  _tickRig(dt) {
+    const H = this._hold, rig = this.rig, d = this.sceneCfg?.device;
+    if (!d) return;
+    const p0 = rig.position.clone();
+    if (H?.target) {
+      rig.position.lerp(H.target, 1 - Math.exp(-dt * 18));
+      this.rigVel.copy(rig.position).sub(p0).divideScalar(Math.max(dt, 1e-3));
+      H.hist.push([rig.position.clone(), performance.now()]); if (H.hist.length > 16) H.hist.shift();
+    } else if (this._fall) {
+      const v = this._fall;
+      v.y -= 9.8 * dt;
+      v.multiplyScalar(Math.exp(-0.4 * dt));
+      rig.position.addScaledVector(v, dt);
+      this._clampRig(rig.position);
+      if (rig.position.y <= 0) {
+        rig.position.y = 0;
+        const vn = -v.y;
+        if (vn > 0.25) {                                                // a heavy little object: a short, dull bounce
+          this.clicker.play(Math.min(0.6, 0.15 + vn * 0.12), 260);
+          this.clicker.play(Math.min(0.35, vn * 0.08), 1200);
+          v.y = vn * 0.12; v.x *= 0.4; v.z *= 0.4;
+        } else { v.set(0, 0, 0); this._fall = null; if (vn > 0.02) this.clicker.play(0.12, 400); }
+      }
+      this.rigVel.copy(rig.position).sub(p0).divideScalar(Math.max(dt, 1e-3));
+      if (!this._fall) { this.rigVel.set(0, 0, 0); this.dispatchEvent(new CustomEvent('scenechange', { detail: clone(this.sceneCfg) })); }
+    } else return;
+    d.x = +rig.position.x.toFixed(4); d.z = +rig.position.z.toFixed(4);
+    rig.updateMatrixWorld(true);
+    this.deviceBox = new THREE.Box3().setFromObject(this.deviceRoot);
+    this._syncFloorRig();
+    this.dispatchEvent(new CustomEvent('devicemove', { detail: { x: d.x, y: rig.position.y, z: d.z }, bubbles: true }));
+  }
+  // It stays on the flat of the table, clear of the sweep up into the walls, and below the ceiling of reach.
+  _clampRig(p) {
+    if (this.sceneCfg.room.walls) {
+      const b = this.localBox, margin = b ? Math.hypot(b.max.x - b.min.x, b.max.z - b.min.z) / 2 : 0.07;
+      for (let i = 0; i < 3; i++) { const s = this.roomSDF(p.x, p.z); if (s.d > -margin) { p.x += s.nx * (s.d + margin); p.z += s.nz * (s.d + margin); } }
+    }
+    p.y = THREE.MathUtils.clamp(p.y, 0, 0.45);
   }
 
   // The projector's footprint on the table, a rounded rectangle wherever it stands: signed distance (metres, negative inside)
@@ -726,8 +778,10 @@ class TemporalProjector extends HTMLElement {
     for (let i = 0; i < P; i++) for (let j = 0; j < Q; j++) {
       const [px, pz, nx, nz] = path[i], [off, y, a] = prof[j], k = (i * Q + j) * 3;
       pos[k] = px + nx * off; pos[k + 1] = y; pos[k + 2] = pz + nz * off;
-      const up = Math.min(1, y / (cv + 0.4)), bend = Math.sin(a * 2) ** 2;    // up the wall; strongest mid-bend, zero on floor and wall
-      const c = page.clone().multiplyScalar((1 - R.shade * up * up) * (1 - R.corner * bend));
+      // the wall is a step darker than the table, reached smoothly through the bend and easing off toward the top (the light
+      // is high up); the bend itself gets a soft extra shade
+      const r0 = Math.min(1, y / (cv * 1.6)), ramp = r0 * r0 * (3 - 2 * r0), bend = Math.sin(a * 2) ** 2;
+      const c = page.clone().multiplyScalar((1 - R.shade * ramp * (1 - 0.35 * Math.min(1, y / 0.8))) * (1 - R.corner * bend));
       col[k] = c.r; col[k + 1] = c.g; col[k + 2] = c.b;
     }
     for (let i = 0; i < P; i++) { const i2 = (i + 1) % P; for (let j = 0; j < Q - 1; j++) { const a = i * Q + j, b = i2 * Q + j, c = a + 1, d = b + 1; idx.push(a, b, c, b, d, c); } }
@@ -804,22 +858,29 @@ class TemporalProjector extends HTMLElement {
     // Table view with the `movable` attribute: the projector's body (not its controls) can be picked up and slid across the table.
     const movable = () => this.table && this.hasAttribute('movable');
     const hitsBody = (e) => { toNdc(e); return ray.intersectObject(this.deviceRoot, true).length > 0; };
+    const holdHit = (e, through) => {
+      toNdc(e);
+      const fwd = this.camera.getWorldDirection(new THREE.Vector3()).setY(0).normalize(), hit = new THREE.Vector3();
+      return ray.ray.intersectPlane(new THREE.Plane().setFromNormalAndCoplanarPoint(fwd, through), hit) ? hit : null;
+    };
     this.rigVel = new THREE.Vector3();
     this.canvas.addEventListener('pointerdown', (e) => {
       const target = pick(e);
       if (!target) {
         if (!movable() || e.button !== 0 || !hitsBody(e)) return;
-        const hit = this.floorRay(e.clientX, e.clientY); if (!hit) return;
-        const d = this.sceneCfg.device;
-        move = { id: e.pointerId, dx: d.x - hit.x, dz: d.z - hit.z, t: performance.now() };
-        this.canvas.setPointerCapture(e.pointerId);
+        const anchor = this.rig.position.clone(), hit = holdHit(e, anchor); if (!hit) return;
+        move = { id: e.pointerId };
+        this._fall = null;
+        const start = anchor.clone().setY(Math.max(anchor.y, 0.012));     // it comes straight up off the table a touch, where it stood
+        this._hold = { anchor, off: start.clone().sub(hit), hist: [], target: start };
+        try { this.canvas.setPointerCapture(e.pointerId); } catch { /* not a live pointer */ }
         this.canvas.style.cursor = 'grabbing';
         this.clicker.play(0.1, 700);                                    // a soft lift off the table
         e.stopPropagation();
         return;
       }
       this.controls.enabled = false;
-      this.canvas.setPointerCapture(e.pointerId);
+      try { this.canvas.setPointerCapture(e.pointerId); } catch { /* not a live pointer */ }
       if (target === this.dial) {
         drag = { a0: pointerAngle(), start: this.dialSpring.v, acc: 0, prev: null, x: e.clientX, y: e.clientY, moved: false };
         drag.prev = drag.a0;
@@ -833,18 +894,14 @@ class TemporalProjector extends HTMLElement {
 
     this.canvas.addEventListener('pointermove', (e) => {
       if (move) {
-        const hit = this.floorRay(e.clientX, e.clientY); if (!hit) return;
-        const d = this.sceneCfg.device, x0 = d.x, z0 = d.z;
-        let x = hit.x + move.dx, z = hit.z + move.dz;
-        if (this.sceneCfg.room.walls) {                                 // it stays on the flat of the table, clear of the sweep
-          const b = this.localBox, margin = b ? Math.hypot(b.max.x - b.min.x, b.max.z - b.min.z) / 2 : 0.07;
-          for (let i = 0; i < 3; i++) { const s = this.roomSDF(x, z); if (s.d > -margin) { x += s.nx * (s.d + margin); z += s.nz * (s.d + margin); } }
-        }
-        const now = performance.now(), dt = Math.max(0.008, (now - move.t) / 1000); move.t = now;
-        d.x = +x.toFixed(4); d.z = +z.toFixed(4);
-        this.rigVel.set((d.x - x0) / dt, 0, (d.z - z0) / dt);
-        this._placeDevice();
-        this.dispatchEvent(new CustomEvent('devicemove', { detail: { x: d.x, z: d.z }, bubbles: true }));
+        // Like the paper: an upright plane through it, square to where you look. Up lifts it; below the table, it slides on the table.
+        const H = this._hold, hit = holdHit(e, H.anchor); if (!hit) return;
+        const tgt = hit.add(H.off), lift = 0.012;
+        // below the table line it slides on the table instead: the hand point at the height that puts the projector at `lift`,
+        // so the switch is seamless
+        if (tgt.y < lift) { const f = this.floorRay(e.clientX, e.clientY, lift - H.off.y); if (f) { tgt.copy(f).add(H.off); H.anchor.copy(tgt); } tgt.y = lift; }
+        this._clampRig(tgt);
+        H.target = tgt;
         return;
       }
       if (drag) {
@@ -868,10 +925,11 @@ class TemporalProjector extends HTMLElement {
 
     const end = () => {
       if (move) {
-        move = null; this.rigVel.set(0, 0, 0);
+        // let go: it keeps a little of the hand's motion (it is heavy) and falls
+        const H = this._hold, now = performance.now(), h = H.hist.filter(([, t]) => now - t < 110);
+        const v = h.length > 1 ? h[h.length - 1][0].clone().sub(h[0][0]).divideScalar(Math.max(0.016, (h[h.length - 1][1] - h[0][1]) / 1000)) : new THREE.Vector3();
+        this._fall = v.multiplyScalar(0.5); this._hold = null; move = null;
         this.canvas.style.cursor = 'grab';
-        this.clicker.play(0.14, 520);                                   // and set down
-        this.dispatchEvent(new CustomEvent('scenechange', { detail: clone(this.sceneCfg) }));
       }
       if (drag) {
         if (!drag.moved) this.setDate(DATES[(this.state.index + 1) % DATES.length].label);
@@ -1228,6 +1286,7 @@ class TemporalProjector extends HTMLElement {
     this.proj.material.opacity = 0.48 * this.projFade.v * flicker;
     if (!this.table) this.controls.update();
     this._tickHologram(dt, performance.now());
+    if (this.table) this._tickRig(dt);
     for (const f of this.tickers) { try { f(dt); } catch (e) { console.error(e); } }
     this.renderer.render(this.scene, this.camera);
   }
