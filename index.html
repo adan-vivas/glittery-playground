@@ -348,8 +348,12 @@
     };
   })();
   // ---------- The note: a crumpled paper ball, drawn as a WebGL mesh ----------
-  // Drag it, throw it, it rolls and bounces off the edges. Click it (or Enter) and it unfolds on springs into a flat letter;
-  // once flat, the real DOM letter takes over so the text is crisp and the button is real. Closing crumples it back up.
+  // Drag it, throw it, it rolls and bounces off the edges. Click it (or Enter) and it is pulled up off the table and unfolds
+  // in the air; once flat, the real DOM letter takes over so the text is crisp and the button is real. Closing crumples it
+  // where it hangs and it drops back onto the table.
+  // Depth: the paper has its own perspective (focal length 1400px). The screen plane (z = 0) is where the open letter is held;
+  // the table lies TABLE_Z below it. We look down at the table at about 50°, as the projector's camera does, so rising h px
+  // off the table moves a thing up the screen by cos 50° · h and toward us by sin 50° · h.
   const pcv = $('paper'), pg = pcv.getContext('webgl', { alpha: true, premultipliedAlpha: true, antialias: true, depth: true });
   const letter = $('letter'), sheetEl = letter.querySelector('.paper'), ballBtn = $('ball'), pshadow = $('pshadow'), pcontact = $('pcontact');
   const GX = 36, GY = 50, NV = (GX + 1) * (GY + 1);
@@ -357,13 +361,13 @@
   const vn = (x, y) => { const xi = Math.floor(x), yi = Math.floor(y), xf = x - xi, yf = y - yi, a = xf * xf * (3 - 2 * xf), b = yf * yf * (3 - 2 * yf);
     return (h2(xi, yi) * (1 - a) + h2(xi + 1, yi) * a) * (1 - b) + (h2(xi, yi + 1) * (1 - a) + h2(xi + 1, yi + 1) * a) * b; };
   const ridge = (x, y) => 1 - Math.abs(vn(x, y) * 2 - 1);                     // sharp creases
-  const BALL = new Float32Array(NV * 3), WR = new Float32Array(NV), WX = new Float32Array(NV), WY = new Float32Array(NV), DL = new Float32Array(NV), UV = new Float32Array(NV * 2);
+  const CR = new Float32Array(NV), BALL = new Float32Array(NV * 3), WR = new Float32Array(NV), WX = new Float32Array(NV), WY = new Float32Array(NV), DL = new Float32Array(NV), UV = new Float32Array(NV * 2);
   const DLTL = new Float32Array(NV), DLTR = new Float32Array(NV);   // crumple order when a top corner is pressed: that corner goes first
   for (let j = 0, i = 0; j <= GY; j++) for (let k = 0; k <= GX; k++, i++) {
     const u = k / GX, v = j / GY; UV[i * 2] = u; UV[i * 2 + 1] = v;
     const lon = (u - .5) * Math.PI * 2 * .94, lat = (v - .5) * Math.PI * .9;   // the sheet wraps a sphere, then folds in on itself
     const cr = .74 + .36 * ridge(u * 5.3 + 1.7, v * 5.3 + 3.1) + .18 * ridge(u * 11 + 7, v * 11 + 2) - .1 * vn(u * 23, v * 23);
-    BALL[i * 3] = Math.cos(lat) * Math.sin(lon) * cr; BALL[i * 3 + 1] = Math.sin(lat) * cr; BALL[i * 3 + 2] = Math.cos(lat) * Math.cos(lon) * cr;
+    CR[i] = cr; BALL[i * 3] = Math.cos(lat) * Math.sin(lon) * cr; BALL[i * 3 + 1] = Math.sin(lat) * cr; BALL[i * 3 + 2] = Math.cos(lat) * Math.cos(lon) * cr;
     WR[i] = (ridge(u * 4 + 9, v * 4 + 4) - .5) * 2 + (ridge(u * 9 + 3, v * 9 + 6) - .5) * 1.2 + (vn(u * 17, v * 17) - .5) * .6;   // creases at three scales
     WX[i] = vn(u * 3 + 11, v * 3 + 5) - .5; WY[i] = vn(u * 3 + 2, v * 3 + 17) - .5;               // the edges pull in unevenly
     DL[i] = Math.min(1, Math.hypot(u - .5, (v - .5) * 1.2) / .62);           // the middle flattens first, the corners last
@@ -371,29 +375,51 @@
   }
   const IDX = new Uint16Array(GX * GY * 6);
   for (let j = 0, n = 0; j < GY; j++) for (let k = 0; k < GX; k++) { const a = j * (GX + 1) + k, b = a + 1, c = a + GX + 1, d = c + 1; IDX.set([a, c, b, b, c, d], n); n += 6; }
-  const POS = new Float32Array(NV * 3), NRM = new Float32Array(NV * 3);
+  const POS = new Float32Array(NV * 3), NRM = new Float32Array(NV * 3), KK = new Float32Array(NV);   // KK: how open each point is (0 = deep in a fold)
+  const TABLE_Z = -130, COS_E = .64, SIN_E = .77, H_OPEN = -TABLE_Z / SIN_E, FOCAL = 1400;
+  const persp = z => FOCAL / (FOCAL - z);
+  const lifted = (gx, gy, h) => [gx, gy - COS_E * h, TABLE_Z + SIN_E * h];          // h px above the table point (gx, gy): screen x, y and depth
+  const unproj = (x, y, z) => { const s = persp(z), cx = innerWidth / 2, cy = innerHeight / 2; return [cx + (x - cx) / s, cy + (y - cy) / s]; };
+  const RW = () => B.r / persp(TABLE_Z);                                              // the ball's true size: B.r on the table, larger as it comes up
 
-  const PV = `attribute vec3 aP; attribute vec3 aN; attribute vec2 aU; uniform vec2 uRes; uniform float uF;
-    varying vec2 vU; varying vec3 vN;
+  const PV = `attribute vec3 aP; attribute vec3 aN; attribute vec2 aU; attribute float aK; uniform vec2 uRes; uniform float uF;
+    varying vec2 vU; varying vec3 vN; varying float vK;
     void main(){ vec2 c = uRes * .5; float s = uF / (uF - aP.z); vec2 sp = c + (aP.xy - c) * s; vec2 nd = sp / uRes * 2. - 1.;
-      gl_Position = vec4(nd.x, -nd.y, -aP.z / 3000., 1.); vU = aU; vN = aN; }`;
-  const PF = `precision highp float; uniform sampler2D uT; varying vec2 vU; varying vec3 vN;
+      gl_Position = vec4(nd.x, -nd.y, -aP.z / 3000., 1.); vU = aU; vN = aN; vK = aK; }`;
+  // Paper, lit like the rest of the scene: a key from the top left, the pale room above, light that wraps past the
+  // terminator and shines through where the sheet turns away, darker deep in the folds, fibres, and the fine crinkle
+  // a sheet keeps once it has been balled up. A sheet facing us comes out at exactly its texture, so the swap to the DOM letter is seamless.
+  const PF = `precision highp float; uniform sampler2D uT; uniform float uC; varying vec2 vU; varying vec3 vN; varying float vK;
     float hs(vec2 p){ p = fract(p * vec2(.1031, .1030)); p += dot(p, p.yx + 33.33); return fract((p.x + p.y) * p.x); }
+    float vn(vec2 p){ vec2 i = floor(p), f = fract(p); f = f * f * (3. - 2. * f);
+      return mix(mix(hs(i), hs(i + vec2(1., 0.)), f.x), mix(hs(i + vec2(0., 1.)), hs(i + vec2(1., 1.)), f.x), f.y); }
+    float fbm(vec2 p){ return vn(p) * .5 + vn(p * 2.03 + 7.1) * .25 + vn(p * 4.07 + 3.3) * .125 + vn(p * 8.11 + 1.9) * .0625; }
     void main(){
       vec3 n = normalize(vN); bool front = n.z >= 0.; if (!front) n = -n;
-      vec3 L = normalize(vec3(-.35, -.55, .76));
-      float d = max(dot(n, L), 0.), shade = (.42 + .62 * d) / (.42 + .62 * L.z);
-      vec3 base = front ? texture2D(uT, vU).rgb : vec3(.952, .942, .915) * (.975 + .025 * hs(floor(vU * 420.)));
-      gl_FragColor = vec4(min(base * shade, vec3(1.)), 1.);
+      vec2 p = vU * vec2(24., 36.); const float e = .03;
+      float h0 = fbm(p); vec2 gr = vec2(fbm(p + vec2(e, 0.)) - h0, fbm(p + vec2(0., e)) - h0) / e;
+      n = normalize(n + vec3(gr * (.015 + .24 * uC), 0.));
+      vec3 L = normalize(vec3(-.45, -.6, .66));
+      float d = dot(n, L), key = max(d, 0.), wrap = clamp((d + .4) / 1.4, 0., 1.), sky = .5 + .5 * n.z;
+      float facing = .34 + .5 * L.z + .16 * (L.z + .4) / 1.4;
+      float lit = (.34 * sky + .5 * key + .16 * wrap) / facing * mix(.62, 1., vK);
+      vec3 base = front ? texture2D(uT, vU).rgb : vec3(.957, .948, .925);
+      base *= 1. + .03 * (fbm(vU * vec2(420., 130.)) * .6 + fbm(vU * vec2(150., 560.)) * .4 - .47);
+      vec3 col = base * lit;
+      col = mix(col * vec3(.93, .93, 1.), col, clamp(lit, 0., 1.));     // shade takes the room's cool lavender
+      col += base * .07 * clamp(-d, 0., 1.);                             // light through the sheet
+      col += vec3(.03) * pow(1. - abs(n.z), 3.) * key;                   // a dry sheen at grazing angles
+      gl_FragColor = vec4(min(col, vec3(1.)), 1.);
     }`;
-  let pprog = null, bPos, bNrm, bUv, bIdx, ptex;
+  let pprog = null, bPos, bNrm, bUv, bK, bIdx, ptex;
   if (pg) {
     const sh = (t, s) => { const o = pg.createShader(t); pg.shaderSource(o, s); pg.compileShader(o); if (!pg.getShaderParameter(o, pg.COMPILE_STATUS)) throw new Error(pg.getShaderInfoLog(o)); return o; };
     pprog = pg.createProgram(); pg.attachShader(pprog, sh(pg.VERTEX_SHADER, PV)); pg.attachShader(pprog, sh(pg.FRAGMENT_SHADER, PF));
-    pg.bindAttribLocation(pprog, 0, 'aP'); pg.bindAttribLocation(pprog, 1, 'aN'); pg.bindAttribLocation(pprog, 2, 'aU'); pg.linkProgram(pprog); pg.useProgram(pprog);
+    pg.bindAttribLocation(pprog, 0, 'aP'); pg.bindAttribLocation(pprog, 1, 'aN'); pg.bindAttribLocation(pprog, 2, 'aU'); pg.bindAttribLocation(pprog, 3, 'aK'); pg.linkProgram(pprog); pg.useProgram(pprog);
     bPos = pg.createBuffer(); pg.bindBuffer(pg.ARRAY_BUFFER, bPos); pg.bufferData(pg.ARRAY_BUFFER, POS.byteLength, pg.DYNAMIC_DRAW); pg.enableVertexAttribArray(0); pg.vertexAttribPointer(0, 3, pg.FLOAT, false, 0, 0);
     bNrm = pg.createBuffer(); pg.bindBuffer(pg.ARRAY_BUFFER, bNrm); pg.bufferData(pg.ARRAY_BUFFER, NRM.byteLength, pg.DYNAMIC_DRAW); pg.enableVertexAttribArray(1); pg.vertexAttribPointer(1, 3, pg.FLOAT, false, 0, 0);
     bUv = pg.createBuffer(); pg.bindBuffer(pg.ARRAY_BUFFER, bUv); pg.bufferData(pg.ARRAY_BUFFER, UV, pg.STATIC_DRAW); pg.enableVertexAttribArray(2); pg.vertexAttribPointer(2, 2, pg.FLOAT, false, 0, 0);
+    bK = pg.createBuffer(); pg.bindBuffer(pg.ARRAY_BUFFER, bK); pg.bufferData(pg.ARRAY_BUFFER, KK.byteLength, pg.DYNAMIC_DRAW); pg.enableVertexAttribArray(3); pg.vertexAttribPointer(3, 1, pg.FLOAT, false, 0, 0);
     bIdx = pg.createBuffer(); pg.bindBuffer(pg.ELEMENT_ARRAY_BUFFER, bIdx); pg.bufferData(pg.ELEMENT_ARRAY_BUFFER, IDX, pg.STATIC_DRAW);
     ptex = pg.createTexture(); pg.bindTexture(pg.TEXTURE_2D, ptex);
     pg.texImage2D(pg.TEXTURE_2D, 0, pg.RGBA, 1, 1, 0, pg.RGBA, pg.UNSIGNED_BYTE, new Uint8Array([251, 249, 243, 255]));
@@ -406,13 +432,43 @@
   grain.width = grain.height = 128; { const g = grain.getContext('2d'), im = g.createImageData(128, 128); for (let i = 0; i < im.data.length; i += 4) { const v = 120 + Math.random() * 60; im.data[i] = v; im.data[i + 1] = v * .92; im.data[i + 2] = v * .78; im.data[i + 3] = Math.random() * 16; } g.putImageData(im, 0, 0); }
   const rrect = (x, l, t, w, h, r) => { x.beginPath(); x.moveTo(l + r, t); x.arcTo(l + w, t, l + w, t + h, r); x.arcTo(l + w, t + h, l, t + h, r); x.arcTo(l, t + h, l, t, r); x.arcTo(l, t, l + w, t, r); x.closePath(); };
   function face(x, el, r0) { const cs = getComputedStyle(el); x.font = `${cs.fontStyle} ${cs.fontWeight} ${cs.fontSize} ${cs.fontFamily}`; x.fillStyle = cs.color; return parseFloat(cs.fontSize); }
+  // The bare sheet: warm white, lit from the top left, grain and fibres, and the creases it keeps from being balled up
+  // (the same crease field the ball folds along), shaded toward the light. The DOM letter wears it too.
+  const fib = document.createElement('canvas'); fib.width = fib.height = 256;
+  { const g = fib.getContext('2d'); g.lineCap = 'round';
+    for (let i = 0; i < 520; i++) { const x0 = Math.random() * 256, y0 = Math.random() * 256, a = Math.random() * Math.PI, l = 3 + Math.random() * 11;
+      g.strokeStyle = Math.random() < .5 ? 'rgba(120,104,80,.07)' : 'rgba(255,255,255,.22)'; g.lineWidth = .4 + Math.random() * .5;
+      g.beginPath(); g.moveTo(x0, y0); g.quadraticCurveTo(x0 + Math.cos(a) * l * .5 + (Math.random() - .5) * 3, y0 + Math.sin(a) * l * .5 + (Math.random() - .5) * 3, x0 + Math.cos(a) * l, y0 + Math.sin(a) * l); g.stroke(); } }
+  function creases(W, H) {
+    const cw = Math.ceil(W / 2), ch = Math.ceil(H / 2), c = document.createElement('canvas'); c.width = cw; c.height = ch;
+    const g = c.getContext('2d'), im = g.createImageData(cw, ch), d = im.data;
+    const f = (u, v) => (ridge(u * 4 + 9, v * 4 + 4) - .5) * 2 + (ridge(u * 9 + 3, v * 9 + 6) - .5) * 1.2 + (vn(u * 17, v * 17) - .5) * .6;
+    const eu = 1 / cw, ev = 1 / ch;
+    for (let y = 0, i = 0; y < ch; y++) for (let x = 0; x < cw; x++, i += 4) {
+      const u = x / cw, v = y / ch, s = (-(f(u + eu, v) - f(u - eu, v)) / (2 * eu) * .6 - (f(u, v + ev) - f(u, v - ev)) / (2 * ev) * .8) * .011;   // facing the top-left light: brighter
+      if (s > 0) { d[i] = d[i + 1] = d[i + 2] = 255; d[i + 3] = Math.min(1, s) * 70; } else { d[i] = 92; d[i + 1] = 82; d[i + 2] = 72; d[i + 3] = Math.min(1, -s) * 62; }
+    }
+    g.putImageData(im, 0, 0); return c;
+  }
+  const paperCv = document.createElement('canvas'); let paperKey = '';
+  function paperFace(W, H, S2) {
+    if (paperKey === W + 'x' + H) return paperCv;
+    paperKey = W + 'x' + H; paperCv.width = W * S2; paperCv.height = H * S2; const x = paperCv.getContext('2d'); x.setTransform(S2, 0, 0, S2, 0, 0);
+    x.fillStyle = '#fbf9f3'; x.fillRect(0, 0, W, H);
+    const g = x.createRadialGradient(W * .2, H * .1, 0, W * .2, H * .1, Math.max(W, H) * 1.15); g.addColorStop(0, 'rgba(255,255,255,.55)'); g.addColorStop(1, 'rgba(222,212,192,.32)');
+    x.fillStyle = g; x.fillRect(0, 0, W, H); x.fillStyle = x.createPattern(grain, 'repeat'); x.fillRect(0, 0, W, H);
+    x.fillStyle = x.createPattern(fib, 'repeat'); x.fillRect(0, 0, W, H);
+    x.imageSmoothingQuality = 'high'; x.drawImage(creases(W, H), 0, 0, W, H);
+    const v = x.createRadialGradient(W / 2, H / 2, Math.min(W, H) * .45, W / 2, H / 2, Math.hypot(W, H) * .58); v.addColorStop(0, 'rgba(0,0,0,0)'); v.addColorStop(1, 'rgba(110,96,74,.08)');
+    x.fillStyle = v; x.fillRect(0, 0, W, H);                                                                  // edges handled more, a touch darker
+    sheetEl.style.background = `#fbf9f3 url(${paperCv.toDataURL('image/jpeg', .92)}) 0 0 / 100% 100%`;
+    return paperCv;
+  }
   function bake() {
     if (!pg) return;
     const r0 = sheetEl.getBoundingClientRect(), W = Math.max(1, Math.round(r0.width)), H = Math.max(1, Math.round(r0.height)), S2 = 2;
-    tcv.width = W * S2; tcv.height = H * S2; const x = tcv.getContext('2d'); x.setTransform(S2, 0, 0, S2, 0, 0);
-    x.fillStyle = '#fbf9f3'; x.fillRect(0, 0, W, H);
-    const g = x.createRadialGradient(W * .25, H * .15, 0, W * .25, H * .15, Math.max(W, H) * 1.1); g.addColorStop(0, 'rgba(255,255,255,.5)'); g.addColorStop(1, 'rgba(226,216,196,.28)');
-    x.fillStyle = g; x.fillRect(0, 0, W, H); x.fillStyle = x.createPattern(grain, 'repeat'); x.fillRect(0, 0, W, H);
+    const bg0 = paperFace(W, H, S2);
+    tcv.width = W * S2; tcv.height = H * S2; const x = tcv.getContext('2d'); x.drawImage(bg0, 0, 0); x.setTransform(S2, 0, 0, S2, 0, 0);
     x.textBaseline = 'alphabetic';
     const tw = document.createTreeWalker(sheetEl, NodeFilter.SHOW_TEXT), rg = document.createRange();
     for (let n; (n = tw.nextNode());) {
@@ -449,14 +505,17 @@
 
   const sheet = { w: 290, h: 440 };
   const B = { x: 0, y: 0, vx: 0, vy: 0, q: qrand(), r: 30, lift: 1.6, lv: 0, wx: 0, wy: 0, wz: 0, ph: 0, sq: 0, sqv: 0, nx: 1, ny: 0 };
-  const SP = { t: 0, tv: 0, c: 1, cv: 0 };                    // t: travel to the letter's place; c: how crumpled (1 = ball)
-  let pmode = 'ball', hov = false, grab = null, from = { x: 0, y: 0 }, qFrom = QI, L = { x: 0, y: 0 }, placed = false;
+  const SP = { t: 0, tv: 0, c: 1, cv: 0, h: 0, hv: 0, q: QI, spin: 0 };   // t: travel to the letter's place; c: how crumpled (1 = ball); h: height above the table
+  let pmode = 'ball', hov = false, grab = null, from = { x: 0, y: 0 }, qFrom = QI, L = { x: 0, y: 0 }, Lg = { x: 0, y: 0 }, placed = false, crinkle = 1;
   function home() { const vw = innerWidth, vh = innerHeight; return vw < 600 ? [57, vh - (vw < 360 ? 136 : 88)] :   /* caption on the 16px margin; under 360px the ball sits a row above Talk to me */ [Math.min(vw / 2 + Math.min(vw * .31, 360) + 44, vw - 150), Math.max(455, vh * .6 + 35)]; }
   function layoutLetter() {
     const vw = innerWidth, vh = innerHeight, w = vw < 600 ? Math.min(320, vw - 32) : 320; letter.style.width = w + 'px';   // ~40 characters a line: fewer orphaned words
     const h = sheetEl.offsetHeight, top0 = vw < 600 ? 12 : 68;
-    L = { x: clamp(B.x - w / 2, 12, Math.max(12, vw - w - 12)), y: clamp(B.y - h / 2, top0, Math.max(top0, vh - h - 12)) };
+    // held straight up above where the ball lay, as far as the window allows
+    L = { x: clamp(B.x - w / 2, 12, Math.max(12, vw - w - 12)), y: clamp(B.y - COS_E * H_OPEN - h / 2, top0, Math.max(top0, vh - h - 12)) };
     letter.style.left = L.x + 'px'; letter.style.top = L.y + 'px';
+    // the table point under the held letter: where its shadow falls, and where it drops when crumpled
+    Lg = { x: clamp(L.x + w / 2, B.r, vw - B.r), y: clamp(L.y + h / 2 + COS_E * H_OPEN, B.r, vh - B.r) };
   }
   const ballHit = (x, y) => pmode === 'ball' && Math.hypot(x - B.x, y - B.y) < B.r * 1.3 + 6;
 
@@ -464,23 +523,22 @@
     if (pmode !== 'ball') return;
     layoutLetter(); bake();
     from = { x: B.x, y: B.y }; qFrom = B.q; B.vx = B.vy = 0;
-    pmode = 'opening'; SP.t = 0; SP.tv = 0; SP.c = 1; SP.cv = 0; document.documentElement.classList.add('letter-open');
+    pmode = 'opening'; SP.t = 0; SP.tv = 0; SP.c = 1; SP.cv = 0; SP.h = Math.max(0, B.lift) * 34; SP.hv = 0; document.documentElement.classList.add('letter-open');
     ballBtn.setAttribute('aria-expanded', 'true'); sfx.rustle(.6, 1); repoint();
     if (reduce) finishOpen();
   }
   const repoint = () => { if (m.inside && fine) onMove({ clientX: m.x, clientY: m.y, pointerType: 'mouse' }); };
-  function finishOpen() { pmode = 'open'; SP.t = 1; SP.c = 0; letter.classList.add('show'); letter.inert = false; repoint(); if (kbdOpen) letter.focus({ preventScroll: true }); }
-  // Close: crumple, starting from the pressed corner when there is one, and land where the pointer is.
+  function finishOpen() { pmode = 'open'; SP.t = 1; SP.c = 0; SP.h = H_OPEN; letter.classList.add('show'); letter.inert = false; repoint(); if (kbdOpen) letter.focus({ preventScroll: true }); }
+  // Close: crumple where it hangs, starting from the pressed corner when there is one, then drop onto the table below.
   let closeDL = DL;
-  function close(corner, px, py) {
+  function close(corner) {
     if (pmode === 'opening') { pmode = 'open'; letter.classList.add('show'); }
     if (pmode !== 'open') return;
-    if (px != null) from = { x: clamp(px, B.r, innerWidth - B.r), y: clamp(py, B.r, innerHeight - B.r) };
-    B.x = from.x; B.y = from.y;                                           // the shadow lands where the ball will
+    from = { x: Lg.x, y: Lg.y };
     closeDL = corner === 'tl' ? DLTL : corner === 'tr' ? DLTR : DL;
     if (letter.contains(document.activeElement)) refocus = true;           // focus goes back to the ball once it lands
     pmode = 'closing'; letter.classList.remove('show', 'peel'); letter.inert = true; document.documentElement.classList.remove('letter-open'); ballBtn.setAttribute('aria-expanded', 'false');
-    qFrom = qrand(); SP.t = 1; SP.tv = 0; SP.c = 0; SP.cv = 0; sfx.rustle(.45, 1.4); repoint();
+    qFrom = qrand(); SP.t = 1; SP.tv = 0; SP.c = 0; SP.cv = 0; SP.h = H_OPEN; SP.hv = 0; SP.spin = 0; sfx.rustle(.45, 1.4); repoint();
     if (reduce) finishClose();
   }
   // Hovering a top corner of the open letter: that corner draws in, lifts and wrinkles a little, as if about to be crumpled.
@@ -493,7 +551,12 @@
     return null;
   }
   function peelTo(c) { if (c) { if (PE.p < .02 || PE.side !== c) { PE.cu = c === 'tl' ? 0 : 1; PE.cv = 0; } if (PE.side !== c) sfx.rustle(.07, .35); PE.side = c; PE.to = 1; } else { PE.to = 0; PE.side = null; } }
-  function finishClose() { pmode = 'ball'; B.x = from.x; B.y = from.y; B.q = qFrom; B.lift = .9; B.lv = 0; SP.t = 0; SP.c = 1; PE.p = PE.v = PE.to = 0; PE.side = null; sfx.paperHit(.35); repoint(); if (refocus) { refocus = false; ballBtn.focus({ preventScroll: true }); } }
+  // Landing: a light, dead thud; it hops a little, skids a hand's width and tumbles to rest.
+  function finishClose(vh = 600) {
+    const a = Math.min(1, vh / 900);
+    pmode = 'ball'; B.x = from.x; B.y = from.y; B.q = SP.q; B.lift = 0; B.lv = 2.2 + 2.5 * a; B.vx = (Math.random() - .5) * 220 * a; B.vy = (40 + Math.random() * 90) * a;
+    B.wx = (Math.random() - .5) * 6 * a; B.wy = (Math.random() - .5) * 6 * a; B.wz = (Math.random() - .5) * 8 * a; B.nx = 0; B.ny = 1; B.sq = .22 * a; B.sqv = 0;
+    SP.t = 0; SP.c = 1; SP.h = 0; PE.p = PE.v = PE.to = 0; PE.side = null; sfx.paperHit(.5 + .5 * a); sfx.thud(.25 * a); repoint(); if (refocus) { refocus = false; ballBtn.focus({ preventScroll: true }); } }
 
   // The projector stands on the same table. Its outline on screen is a wall the ball crumples against, like the window edges.
   function nearestOnPoly(px, py, poly) {
@@ -542,7 +605,9 @@
         const w0 = Math.max(0, 1 - Math.hypot((u - PE.cu) * sheet.w, (v - PE.cv) * sheet.h) / 170), w = w0 * w0 * peel;
         fx -= fx * w * .2; fy -= fy * w * .2; fx += WX[i] * w * amp * .9; fy += WY[i] * w * amp * .9; pz = w * 44 + WR[i] * w * amp * 1.4;
       }
-      const mid = Math.sin(Math.PI * k), wr = WR[i] * mid * amp, bw = bow * (1 - 4 * ((u - .5) ** 2 + (v - .5) ** 2));
+      const mid = Math.sin(Math.PI * k), fold = clamp((CR[i] - .7) / .55, 0, 1);
+      KK[i] = (fold + (1 - fold) * k) * (1 - .3 * mid * clamp(-WR[i], 0, 1.5) / 1.5);
+      const wr = WR[i] * mid * amp, bw = bow * (1 - 4 * ((u - .5) ** 2 + (v - .5) ** 2));
       POS[i * 3] = cx + rx + (fx - rx) * k + WX[i] * mid * amp * 1.6; POS[i * 3 + 1] = cy + ry + (fy - ry) * k + WY[i] * mid * amp * 1.6; POS[i * 3 + 2] = z + rz * (1 - k) + wr + bw + pz * k;
     }
     for (let j = 0, i = 0; j <= GY; j++) for (let k = 0; k <= GX; k++, i++) {
@@ -561,27 +626,28 @@
     pg.useProgram(pprog);
     pg.bindBuffer(pg.ARRAY_BUFFER, bPos); pg.bufferSubData(pg.ARRAY_BUFFER, 0, POS);
     pg.bindBuffer(pg.ARRAY_BUFFER, bNrm); pg.bufferSubData(pg.ARRAY_BUFFER, 0, NRM);
-    pg.uniform2f(pg.getUniformLocation(pprog, 'uRes'), innerWidth, innerHeight); pg.uniform1f(pg.getUniformLocation(pprog, 'uF'), 1400);
+    pg.bindBuffer(pg.ARRAY_BUFFER, bK); pg.bufferSubData(pg.ARRAY_BUFFER, 0, KK); pg.uniform1f(pg.getUniformLocation(pprog, 'uC'), crinkle);
+    pg.uniform2f(pg.getUniformLocation(pprog, 'uRes'), innerWidth, innerHeight); pg.uniform1f(pg.getUniformLocation(pprog, 'uF'), FOCAL);
     pg.activeTexture(pg.TEXTURE0); pg.bindTexture(pg.TEXTURE_2D, ptex); pg.uniform1i(pg.getUniformLocation(pprog, 'uT'), 0);
     pg.drawElements(pg.TRIANGLES, IDX.length, pg.UNSIGNED_SHORT, 0);
   }
-  // Shadows, lit like the projector: from the top left. On the table the ball sits on a tight, dark contact shadow
-  // (where it touches, a little below its centre, since we look down at the desk), and casts a soft one stretched toward
-  // the bottom right. Lifted, both slide away and fade. Opening, the cast shadow morphs into a rectangle under the sheet.
+  // Shadows, lit like the projector: from the top left, falling on the table. Resting, the ball sits on a tight, dark contact
+  // shadow at its bottom edge and casts a soft one toward the bottom right. Off the table, the shadow stays on the table:
+  // it slides away along the light (about 0.9px right and 0.45px down per px of height), spreads and fades. Unfolded,
+  // it becomes the sheet's shadow, shorter than the sheet since we look down on it.
   const CAST = 32 * Math.PI / 180;
-  function shadow(f, lift) {
-    const r = B.r, g = f * f, up = Math.max(0, lift), touch = placed ? clamp(1 - up * 2.2, 0, 1) * (1 - f) : 0;
-    const px = B.x + 3, py = B.y + r * 1.02;                                  // where the ball meets the table: its drawn bottom edge
+  function shadow(gx, gy, h, u) {   // gx, gy: the table point under the paper's centre; h: its height above it; u: how unfolded (0 ball, 1 sheet)
+    const r = B.r, g = u * u, up = clamp(h / H_OPEN, 0, 1), on = placed ? 1 : 0, touch = clamp(1 - h / 10, 0, 1) * (1 - u);
+    const px = gx + 3, py = gy + r * 1.02, dx = .9 * h, dy = .45 * h;
     pcontact.style.width = r * 1.8 + 'px'; pcontact.style.height = r * .5 + 'px';
-    pcontact.style.transform = `translate(${px - r * .9}px, ${py - r * .3}px)`; pcontact.style.opacity = String(.75 * touch);
-    const bw = r * 3.1, bh = r * 1.6, off = r * 1.05 + up * 22;                // cast: along the light, away from the top left
-    const bx = px + Math.cos(CAST) * off - bw / 2, by = py - r * .45 + Math.sin(CAST) * off - bh / 2;
-    const sw = sheet.w - 10, sh = sheet.h - 6, sx = L.x + 5, sy = L.y + 12;
-    const x = bx + (sx - bx) * g, y = by + (sy - by) * g, w = bw + (sw - bw) * g, h = bh + (sh - bh) * g;
-    pshadow.style.width = w + 'px'; pshadow.style.height = h + 'px';
+    pcontact.style.transform = `translate(${px - r * .9}px, ${py - r * .3}px)`; pcontact.style.opacity = String(.75 * touch * on);
+    const bw = r * 3.1, bh = r * 1.6, bx = px + Math.cos(CAST) * r * 1.05 + dx, by = py - r * .45 + Math.sin(CAST) * r * 1.05 + dy;
+    const sw = sheet.w * .96, sh = sheet.h * .72, sx = gx + dx, sy = gy + dy;
+    const w = bw + (sw - bw) * g, hh = bh + (sh - bh) * g, x = bx + (sx - bx) * g - w / 2, y = by + (sy - by) * g - hh / 2;
+    pshadow.style.width = w + 'px'; pshadow.style.height = hh + 'px';
     pshadow.style.transform = `translate(${x}px, ${y}px) rotate(${(CAST * (1 - g)).toFixed(3)}rad)`;
-    pshadow.style.borderRadius = (50 - 48 * g) + '%'; pshadow.style.filter = `blur(${(9 + up * 8) * (1 - g) + 16 * g}px)`;
-    pshadow.style.opacity = String(placed ? (.5 - up * .15) * (1 - f) + .14 * g : 0);
+    pshadow.style.borderRadius = (50 - 46 * g) + '%'; pshadow.style.filter = `blur(${(9 + up * 22) * (1 - g) + (14 + up * 14) * g}px)`;
+    pshadow.style.opacity = String(on * ((.5 - up * .32) * (1 - g) + (.24 - up * .1) * g));
   }
 
   let plast = performance.now();
@@ -627,25 +693,36 @@
       if (wl * dt > 1e-5 && !reduce) B.q = qnorm(qmul(qax(B.wx / wl, B.wy / wl, B.wz / wl, wl * dt), B.q));
       [B.sq, B.sqv] = spring(B.sq, B.sqv, 0, 520, 15, dt);
       [B.lift, B.lv] = spring(B.lift, B.lv, grab && grab.moved ? 1 : hov ? .2 : 0, 320, 18, dt);
-      const r = B.r * (1 + .07 * B.lift); shape(B.x, B.y, B.lift * 26, r, B.q, 1, 0, DL, 0, reduce ? 0 : B.sq); shadow(0, Math.max(0, B.lift));
-      ballBtn.style.transform = `translate(${B.x - 32}px, ${B.y - 32}px)`;
-      ballcap.style.transform = `translate(${B.x - ballcap.offsetWidth / 2}px, ${B.y + B.r + 10 + Math.max(0, B.lift) * 6}px)`; ballcap.style.opacity = '1';
+      const hgt = Math.max(0, B.lift) * 34, [sx, sy, z] = lifted(B.x, B.y, hgt), [wx, wy] = unproj(sx, sy, z);   // picked up: it rises off the table toward us
+      crinkle = 1; shape(wx, wy, z, RW(), B.q, 1, 0, DL, 0, reduce ? 0 : B.sq); shadow(B.x, B.y, hgt, 0);
+      ballBtn.style.transform = `translate(${sx - 32}px, ${sy - 32}px)`;
+      ballcap.style.transform = `translate(${sx - ballcap.offsetWidth / 2}px, ${sy + B.r + 10}px)`; ballcap.style.opacity = '1';
     } else if (pmode === 'opening' || pmode === 'closing') {
       ballcap.style.opacity = '0';
       const opening = pmode === 'opening';
-      if (opening) { [SP.t, SP.tv] = spring(SP.t, SP.tv, 1, 90, 18, dt); [SP.c, SP.cv] = spring(SP.c, SP.cv, 0, 48, 13, dt); }
-      else { [SP.c, SP.cv] = spring(SP.c, SP.cv, 1, 85, 17, dt); [SP.t, SP.tv] = spring(SP.t, SP.tv, SP.c > .5 ? 0 : 1, 130, 22, dt); }
-      const c = clamp(SP.c, 0, 1), tt = SP.t, cx = from.x + (L.x + sheet.w / 2 - from.x) * tt, cy = from.y + (L.y + sheet.h / 2 - from.y) * tt;
-      const q = opening ? qslerp(qFrom, QI, ss((1 - c) * 1.4)) : qslerp(QI, qFrom, ss(c * 1.4));
-      const lift = Math.sin(Math.PI * clamp(tt, 0, 1)), z = 110 * lift * (opening ? 1 : .6), bow = 34 * Math.sin(Math.PI * (1 - c));
-      shape(cx, cy, z, B.r * (1 + .1 * lift), q, c, bow, opening ? DL : closeDL, opening ? 0 : PE.p * (1 - c)); shadow(ss(1 - c), lift * .6);
-      if (opening && Math.abs(1 - SP.t) < .003 && Math.abs(SP.tv) < .03 && SP.c < .003 && Math.abs(SP.cv) < .03) finishOpen();
-      if (!opening && SP.c > .996 && SP.t < .004 && Math.abs(SP.tv) < .05) finishClose();
+      if (opening) {                                                      // pulled up off the table, then it travels and opens in the air
+        [SP.h, SP.hv] = spring(SP.h, SP.hv, H_OPEN, 60, 13, dt);
+        const up = SP.h / H_OPEN;
+        if (up > .25) [SP.t, SP.tv] = spring(SP.t, SP.tv, 1, 60, 14, dt);
+        if (up > .45) [SP.c, SP.cv] = spring(SP.c, SP.cv, 0, 48, 13, dt);
+      } else {                                                            // crumpled where it hangs, then it falls
+        [SP.c, SP.cv] = spring(SP.c, SP.cv, 1, 85, 17, dt);
+        if (SP.c > .72) { SP.hv -= 2600 * dt; SP.h += SP.hv * dt; SP.spin += dt * (2 + Math.abs(SP.hv) / 160); }
+      }
+      const c = clamp(SP.c, 0, 1), tt = SP.t, h = Math.max(0, SP.h), gx = from.x + (Lg.x - from.x) * tt, gy = from.y + (Lg.y - from.y) * tt;
+      let q = opening ? qslerp(qFrom, QI, ss((1 - c) * 1.4)) : qslerp(QI, qFrom, ss(c * 1.4));
+      if (!opening && SP.spin) q = qnorm(qmul(qax(.48, .8, .36, SP.spin), q));   // a balled-up sheet tumbles as it drops
+      SP.q = q;
+      const [sx, sy, z] = lifted(gx, gy, h), [wx, wy] = unproj(sx, sy, z), bow = 34 * Math.sin(Math.PI * (1 - c));
+      crinkle = c; shape(wx, wy, z, RW(), q, c, bow, opening ? DL : closeDL, opening ? 0 : PE.p * (1 - c)); shadow(gx, gy, h, ss(1 - c));
+      if (opening && Math.abs(1 - SP.t) < .003 && Math.abs(SP.tv) < .03 && SP.c < .003 && Math.abs(SP.cv) < .03 && Math.abs(H_OPEN - SP.h) < .5 && Math.abs(SP.hv) < 2) finishOpen();
+      if (!opening && SP.h <= 0) finishClose(-SP.hv);
     } else {                                                               // open: the DOM letter shows, unless a corner is being peeled
       [PE.p, PE.v] = spring(PE.p, PE.v, PE.to, 260, 22, dt);
       const peeling = PE.p > .002 || PE.to > 0; letter.classList.toggle('peel', peeling);
-      if (peeling) shape(L.x + sheet.w / 2, L.y + sheet.h / 2, 0, B.r, QI, 0, 0, DL, Math.max(0, PE.p));
-      shadow(1, 0);
+      crinkle = PE.p * .5;
+      if (peeling) shape(L.x + sheet.w / 2, L.y + sheet.h / 2, 0, RW(), QI, 0, 0, DL, Math.max(0, PE.p));
+      shadow(Lg.x, Lg.y, H_OPEN, 1);
     }
     if (pg) render();
     requestAnimationFrame(step);
@@ -656,7 +733,7 @@
   // Hold to drag, release to throw, a short press opens. The ball's own button handles the keyboard.
   addEventListener('pointerdown', e => {
     const corner = e.button === 0 && cornerAt(e.clientX, e.clientY);
-    if (corner) { e.preventDefault(); e.stopPropagation(); swallow = true; close(corner, e.clientX, e.clientY); return; }
+    if (corner) { e.preventDefault(); e.stopPropagation(); swallow = true; close(corner); return; }
     if (e.button !== 0 || !ballHit(e.clientX, e.clientY)) return;
     grab = { id: e.pointerId, ox: e.clientX - B.x, oy: e.clientY - B.y, sx: e.clientX, sy: e.clientY, x: e.clientX, y: e.clientY, moved: false, hist: [[e.clientX, e.clientY, e.timeStamp]] };
     B.vx = B.vy = 0; e.preventDefault(); e.stopPropagation(); sfx.rustle(.08, .5);   // the device under the ball does not orbit
@@ -682,7 +759,7 @@
   let kbdOpen = false, refocus = false;
   ballBtn.addEventListener('click', e => { kbdOpen = e.detail === 0; open(); });   // detail 0: Enter or Space, not a tap
   const crumpleBtn = letter.querySelector('.crumple');
-  crumpleBtn.addEventListener('click', () => { const r = crumpleBtn.getBoundingClientRect(); refocus = kbdOpen; close('tr', r.left + r.width / 2, r.top + r.height / 2); });
+  crumpleBtn.addEventListener('click', () => { refocus = kbdOpen; close('tr'); });
   const ballcap = $('ballcap');
   addEventListener('resize', () => { if (pmode === 'ball') { B.x = clamp(B.x, B.r, innerWidth - B.r); B.y = clamp(B.y, B.r, innerHeight - B.r); } else if (pmode === 'open') layoutLetter(); });
 
@@ -697,7 +774,7 @@
     if (swallow) { swallow = false; e.preventDefault(); e.stopPropagation(); return; }
     // An open letter closes only from its corners (pointerdown above) or a click on empty space. Timeline, controls and links leave it open.
     const empty = e.target === canvas || e.target === document.body || e.target === document.documentElement;
-    if (work.pinned && empty) { e.preventDefault(); e.stopPropagation(); close(null, e.clientX, e.clientY); }
+    if (work.pinned && empty) { e.preventDefault(); e.stopPropagation(); close(null); }
   }, true);
   function zoneAt(x, y) {
     const pad = 6, hit = r => x > r.left - pad && x < r.right + pad && y > r.top - pad && y < r.bottom + pad;
