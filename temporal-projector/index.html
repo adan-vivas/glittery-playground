@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Temporal Projector</title>
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+        "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"
+      }
+    }
+  </script>
+  <script type="module" src="./temporal-projector.js"></script>
+  <style>
+    :root { --bg: #e4e4e2; --ink: #1a1a1a; --mute: rgba(26,26,26,.48); --signal: #ff3a0e; }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; background: var(--bg); color: var(--ink);
+      font-family: "Helvetica Neue", Helvetica, Arial, sans-serif; -webkit-font-smoothing: antialiased; }
+    main { min-height: 100svh; display: grid; grid-template-rows: 1fr auto; }
+    temporal-projector { width: 100%; height: calc(100svh - 92px); min-height: 420px; }
+    footer { display: flex; justify-content: space-between; align-items: end; gap: 24px;
+      padding: 0 32px 28px; font-size: 11px; letter-spacing: .12em; text-transform: uppercase; }
+    ol { display: flex; gap: 28px; list-style: none; margin: 0; padding: 0; color: var(--mute); }
+    ol li span { color: var(--ink); margin-right: 8px; font-variant-numeric: tabular-nums; }
+    .readout { text-align: right; color: var(--mute); }
+    .readout b { display: block; font-weight: 400; font-size: 28px; letter-spacing: .02em;
+      color: var(--ink); font-variant-numeric: tabular-nums; margin-top: 6px; text-transform: none; }
+    .readout b.future { color: var(--signal); }
+    @media (max-width: 640px) {
+      temporal-projector { height: calc(100svh - 190px); min-height: 360px; }
+      footer { flex-direction: column; align-items: start; padding: 0 16px 20px; }
+      ol { flex-direction: column; gap: 8px; }
+      .readout { text-align: left; }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <temporal-projector date="2026"></temporal-projector>
+    <footer>
+      <ol>
+        <li><span>01</span>Turn or click the dial</li>
+        <li><span>02</span>Press the orange key for a plausible future</li>
+        <li><span>03</span>I / O for power</li>
+      </ol>
+      <div class="readout">Projecting <b id="readout">2026</b></div>
+    </footer>
+  </main>
+  <script>
+    const out = document.getElementById('readout');
+    const el = document.querySelector('temporal-projector');
+    el.addEventListener('datechange', (e) => {
+      out.textContent = e.detail.projected;
+      out.classList.toggle('future', e.detail.date === 'FUTURE');
+    });
+    el.addEventListener('powerchange', (e) => {
+      out.textContent = e.detail.on ? el.state.projected : 'Off';
+    });
+  </script>
+</body>
+</html>
