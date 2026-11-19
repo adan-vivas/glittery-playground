@@ -458,10 +458,11 @@ class TemporalProjector extends HTMLElement {
       key.target.position.copy(TABLE_TARGET);
       key.intensity = 1.35;
       Object.assign(key.shadow.camera, { left: -0.16, right: 0.16, top: 0.16, bottom: -0.16, near: 0.1, far: 1 });
-      key.shadow.mapSize.set(1024, 1024);
-      key.shadow.radius = 9;
+      key.shadow.mapSize.set(512, 512);    // low resolution plus a wide filter: a soft, diffuse shadow
+      key.shadow.radius = 16;
+      key.shadow.blurSamples = 25;
       key.shadow.bias = -0.0002;
-      const floor = new THREE.Mesh(new THREE.PlaneGeometry(4, 4), new THREE.ShadowMaterial({ color: 0x1c1a2e, opacity: 0.3 }));
+      const floor = new THREE.Mesh(new THREE.PlaneGeometry(4, 4), new THREE.ShadowMaterial({ color: 0x1c1a2e, opacity: 0.22 }));
       floor.rotation.x = -Math.PI / 2;
       floor.position.y = -0.0002;
       floor.receiveShadow = true;

@@ -24,8 +24,8 @@
   /* The table: the device stands on the page itself, and the whole screen is the desk. The stage variables place it. */
   :root { --m: clamp(16px, 2.7vw, 52px); }
   temporal-projector { position: fixed; inset: 0; width: 100%; height: 100%; min-height: 0; z-index: 0; font-family: inherit;
-    --stage-x: .32; --stage-y: .56; --stage-scale: .22; }
-  @media (min-aspect-ratio: 16/10) { temporal-projector { --stage-x: .4; } }   /* wide and short: step clear of the text, so the hologram has the sky to itself */
+    --stage-x: .27; --stage-y: .56; --stage-scale: .22; }
+  @media (min-aspect-ratio: 16/10) { temporal-projector { --stage-x: .35; } }   /* wide and short: step clear of the text, so the hologram has the sky to itself */
   @media (max-width: 1023px) { temporal-projector { --stage-x: .5; --stage-y: .6; --stage-scale: .19; } }
   temporal-projector:focus-visible { box-shadow: none; outline: 2px solid var(--ink); outline-offset: -8px; border-radius: 16px; }
 
@@ -83,7 +83,8 @@
 
   /* ---------- The note: a crumpled paper ball, drawn in WebGL, that unfolds into a letter ---------- */
   #paper { position: fixed; inset: 0; width: 100%; height: 100%; z-index: 3; pointer-events: none; }
-  #pshadow { position: fixed; left: 0; top: 0; z-index: 2; pointer-events: none; background: rgba(40, 32, 16, .30); opacity: 0; will-change: transform, opacity; }
+  #pshadow, #pcontact { position: fixed; left: 0; top: 0; z-index: 2; pointer-events: none; background: rgba(28, 26, 46, .5); opacity: 0; will-change: transform, opacity; transform-origin: 50% 50%; }
+  #pcontact { border-radius: 50%; background: rgba(16, 14, 28, .75); filter: blur(2.5px); }
   #ball { position: fixed; left: 0; top: 0; z-index: 3; width: 64px; height: 64px; padding: 0; border: 0; border-radius: 50%; background: none; pointer-events: none; -webkit-tap-highlight-color: transparent; }
   #ball:focus-visible { outline: 2px solid var(--ink); outline-offset: 4px; }
   #letter { position: fixed; z-index: 6; left: 0; top: 0; width: 290px; visibility: hidden; pointer-events: none; }
@@ -193,7 +194,7 @@
   </nav>
 </div>
 <canvas id="paper" aria-hidden="true"></canvas>
-<div id="pshadow" aria-hidden="true"></div>
+<div id="pshadow" aria-hidden="true"></div><div id="pcontact" aria-hidden="true"></div>
 <span id="ballcap" aria-hidden="true">View work</span>
 <button type="button" id="ball" aria-label="Open the note about my portfolio" aria-controls="letter" aria-expanded="false"></button>
 <article id="letter" aria-label="A note from Adán" tabindex="-1" inert>
@@ -350,7 +351,7 @@
   // Drag it, throw it, it rolls and bounces off the edges. Click it (or Enter) and it unfolds on springs into a flat letter;
   // once flat, the real DOM letter takes over so the text is crisp and the button is real. Closing crumples it back up.
   const pcv = $('paper'), pg = pcv.getContext('webgl', { alpha: true, premultipliedAlpha: true, antialias: true, depth: true });
-  const letter = $('letter'), sheetEl = letter.querySelector('.paper'), ballBtn = $('ball'), pshadow = $('pshadow');
+  const letter = $('letter'), sheetEl = letter.querySelector('.paper'), ballBtn = $('ball'), pshadow = $('pshadow'), pcontact = $('pcontact');
   const GX = 36, GY = 50, NV = (GX + 1) * (GY + 1);
   const h2 = (x, y) => { const n = Math.sin(x * 127.1 + y * 311.7) * 43758.5453; return n - Math.floor(n); };
   const vn = (x, y) => { const xi = Math.floor(x), yi = Math.floor(y), xf = x - xi, yf = y - yi, a = xf * xf * (3 - 2 * xf), b = yf * yf * (3 - 2 * yf);
@@ -564,14 +565,23 @@
     pg.activeTexture(pg.TEXTURE0); pg.bindTexture(pg.TEXTURE_2D, ptex); pg.uniform1i(pg.getUniformLocation(pprog, 'uT'), 0);
     pg.drawElements(pg.TRIANGLES, IDX.length, pg.UNSIGNED_SHORT, 0);
   }
-  // The shadow morphs from a soft ellipse under the ball to a rectangle under the sheet.
+  // Shadows, lit like the projector: from the top left. On the table the ball sits on a tight, dark contact shadow
+  // (where it touches, a little below its centre, since we look down at the desk), and casts a soft one stretched toward
+  // the bottom right. Lifted, both slide away and fade. Opening, the cast shadow morphs into a rectangle under the sheet.
+  const CAST = 32 * Math.PI / 180;
   function shadow(f, lift) {
-    const r = B.r, bw = r * 2.3, bh = r * .95, bx = B.x - bw / 2 + 3 + lift * 7, by = B.y + r * .78 - bh / 2 + lift * 12;
+    const r = B.r, g = f * f, up = Math.max(0, lift), touch = placed ? clamp(1 - up * 2.2, 0, 1) * (1 - f) : 0;
+    const px = B.x + 3, py = B.y + r * 1.02;                                  // where the ball meets the table: its drawn bottom edge
+    pcontact.style.width = r * 1.8 + 'px'; pcontact.style.height = r * .5 + 'px';
+    pcontact.style.transform = `translate(${px - r * .9}px, ${py - r * .3}px)`; pcontact.style.opacity = String(.75 * touch);
+    const bw = r * 3.1, bh = r * 1.6, off = r * 1.05 + up * 22;                // cast: along the light, away from the top left
+    const bx = px + Math.cos(CAST) * off - bw / 2, by = py - r * .45 + Math.sin(CAST) * off - bh / 2;
     const sw = sheet.w - 10, sh = sheet.h - 6, sx = L.x + 5, sy = L.y + 12;
-    const g = f * f, x = bx + (sx - bx) * g, y = by + (sy - by) * g, w = bw + (sw - bw) * g, h = bh + (sh - bh) * g;
-    pshadow.style.width = w + 'px'; pshadow.style.height = h + 'px'; pshadow.style.transform = `translate(${x}px, ${y}px)`;
-    pshadow.style.borderRadius = (50 - 48 * g) + '%'; pshadow.style.filter = `blur(${(6 + lift * 8) * (1 - g) + 16 * g}px)`;
-    pshadow.style.opacity = String(placed ? (.34 - lift * .1) * (1 - f) + .24 * g : 0);
+    const x = bx + (sx - bx) * g, y = by + (sy - by) * g, w = bw + (sw - bw) * g, h = bh + (sh - bh) * g;
+    pshadow.style.width = w + 'px'; pshadow.style.height = h + 'px';
+    pshadow.style.transform = `translate(${x}px, ${y}px) rotate(${(CAST * (1 - g)).toFixed(3)}rad)`;
+    pshadow.style.borderRadius = (50 - 48 * g) + '%'; pshadow.style.filter = `blur(${(9 + up * 8) * (1 - g) + 16 * g}px)`;
+    pshadow.style.opacity = String(placed ? (.5 - up * .15) * (1 - f) + .14 * g : 0);
   }
 
   let plast = performance.now();
@@ -616,7 +626,7 @@
       const wl = Math.hypot(B.wx, B.wy, B.wz);
       if (wl * dt > 1e-5 && !reduce) B.q = qnorm(qmul(qax(B.wx / wl, B.wy / wl, B.wz / wl, wl * dt), B.q));
       [B.sq, B.sqv] = spring(B.sq, B.sqv, 0, 520, 15, dt);
-      [B.lift, B.lv] = spring(B.lift, B.lv, grab && grab.moved ? 1 : hov ? .45 : 0, 320, 18, dt);
+      [B.lift, B.lv] = spring(B.lift, B.lv, grab && grab.moved ? 1 : hov ? .2 : 0, 320, 18, dt);
       const r = B.r * (1 + .07 * B.lift); shape(B.x, B.y, B.lift * 26, r, B.q, 1, 0, DL, 0, reduce ? 0 : B.sq); shadow(0, Math.max(0, B.lift));
       ballBtn.style.transform = `translate(${B.x - 32}px, ${B.y - 32}px)`;
       ballcap.style.transform = `translate(${B.x - ballcap.offsetWidth / 2}px, ${B.y + B.r + 10 + Math.max(0, B.lift) * 6}px)`; ballcap.style.opacity = '1';
