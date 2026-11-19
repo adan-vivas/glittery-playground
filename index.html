@@ -180,7 +180,7 @@
 <noscript><style>.pre #pill, .pre #brand, .pre #contact { opacity: 1; scale: 1; filter: none; } #ball, #hint, temporal-projector { display: none; }</style></noscript>
 </head>
 <body>
-<temporal-projector table power="off" date="2026"></temporal-projector>
+<temporal-projector table movable power="off" date="2026"></temporal-projector>
 <button type="button" id="hint" class="idle" aria-label="Switch the projector on"><span>Press I/O<kbd> or P</kbd></span><i aria-hidden="true"></i></button>
 <a id="pill" href="https://cal.com/adanvivas/intro-call" target="_blank" rel="noopener" draggable="false"><span class="lbl"><span data-k="talk" class="on">Talk to me</span><span data-k="work" aria-hidden="true">View work</span><span data-k="crumple" aria-hidden="true">↩&#xFE0E; Crumple</span></span><span class="sr"> (opens in a new tab)</span></a>
 <div id="top">
@@ -505,7 +505,12 @@ import * as THREE from 'three';
     if (room.walls) { const s = device.roomSDF(B.p.x, B.p.z); if (s.d > -r) impact(s.nx, s.nz, s.d + r); }   // the foot of the cove
     if (low) for (const e of viewLines(r)) { const d = (B.p.x - e.px) * e.nx + (B.p.z - e.pz) * e.nz; if (d < r) impact(e.nx, e.nz, r - d); }   // on the table, it stays in view
     if (B.p.y - r < TOP - .002) {                                      // beside the projector, not on top of it
-      const s = devSDF(B.p.x, B.p.z); if (s.d < r) { const vn = impact(s.nx, s.nz, r - s.d); if (vn > .06) sfx.thud(vn / .7); }
+      const s = devSDF(B.p.x, B.p.z);
+      if (s.d < r) {
+        const vn = impact(s.nx, s.nz, r - s.d); if (vn > .06) sfx.thud(vn / .7);
+        const push = device.rigVel ? device.rigVel.x * s.nx + device.rigVel.z * s.nz : 0;   // slid into it, the projector shoves it along
+        if (push > 0 && !grab) { B.v.x += s.nx * push * 1.3; B.v.z += s.nz * push * 1.3; if (push > .15) sfx.paperHit(push / .8); }
+      }
     }
   }
 

@@ -44,7 +44,8 @@ Then open <http://localhost:4317>.
 ```
 
 - **Attributes:** `date` (`1996` `2006` `2016` `2026` `FUTURE`), `power` (`on`/`off`), `zoom`, `muted`, `src`, `shadow`,
-  `table` (a fixed view down onto a desk, lit from the top left, shadows on the page colour; no orbiting)
+  `table` (a fixed view down onto a desk, lit from the top left, shadows on the page colour; no orbiting),
+  `movable` (with `table`: press the projector's body and slide it across the table; fires `devicemove`)
 - **Table scene:** `setScene({ camera, light, device, room })` and `getScene()` change the table view live (see `TABLE_SCENE` in the
   source); `tickers` (a Set of functions called each frame), `floorRay(x, y)`, `toScreen(v)`, `keyLight`, `lightDir`, `rig` (the placed projector), `footprintSDF(x, z)`, `roomSDF(x, z)`
 - **Table placement** (CSS custom properties): `--stage-x`, `--stage-y` (where the device sits, as fractions of the element),

@@ -800,10 +800,24 @@ class TemporalProjector extends HTMLElement {
       return THREE.MathUtils.radToDeg(Math.atan2(-(hitPoint.z - DIAL_C.z), hitPoint.x - DIAL_C.x));
     };
 
-    let drag = null, pressed = null;
+    let drag = null, pressed = null, move = null;
+    // Table view with the `movable` attribute: the projector's body (not its controls) can be picked up and slid across the table.
+    const movable = () => this.table && this.hasAttribute('movable');
+    const hitsBody = (e) => { toNdc(e); return ray.intersectObject(this.deviceRoot, true).length > 0; };
+    this.rigVel = new THREE.Vector3();
     this.canvas.addEventListener('pointerdown', (e) => {
       const target = pick(e);
-      if (!target) return;
+      if (!target) {
+        if (!movable() || e.button !== 0 || !hitsBody(e)) return;
+        const hit = this.floorRay(e.clientX, e.clientY); if (!hit) return;
+        const d = this.sceneCfg.device;
+        move = { id: e.pointerId, dx: d.x - hit.x, dz: d.z - hit.z, t: performance.now() };
+        this.canvas.setPointerCapture(e.pointerId);
+        this.canvas.style.cursor = 'grabbing';
+        this.clicker.play(0.1, 700);                                    // a soft lift off the table
+        e.stopPropagation();
+        return;
+      }
       this.controls.enabled = false;
       this.canvas.setPointerCapture(e.pointerId);
       if (target === this.dial) {
@@ -818,6 +832,21 @@ class TemporalProjector extends HTMLElement {
     }, { capture: true });
 
     this.canvas.addEventListener('pointermove', (e) => {
+      if (move) {
+        const hit = this.floorRay(e.clientX, e.clientY); if (!hit) return;
+        const d = this.sceneCfg.device, x0 = d.x, z0 = d.z;
+        let x = hit.x + move.dx, z = hit.z + move.dz;
+        if (this.sceneCfg.room.walls) {                                 // it stays on the flat of the table, clear of the sweep
+          const b = this.localBox, margin = b ? Math.hypot(b.max.x - b.min.x, b.max.z - b.min.z) / 2 : 0.07;
+          for (let i = 0; i < 3; i++) { const s = this.roomSDF(x, z); if (s.d > -margin) { x += s.nx * (s.d + margin); z += s.nz * (s.d + margin); } }
+        }
+        const now = performance.now(), dt = Math.max(0.008, (now - move.t) / 1000); move.t = now;
+        d.x = +x.toFixed(4); d.z = +z.toFixed(4);
+        this.rigVel.set((d.x - x0) / dt, 0, (d.z - z0) / dt);
+        this._placeDevice();
+        this.dispatchEvent(new CustomEvent('devicemove', { detail: { x: d.x, z: d.z }, bubbles: true }));
+        return;
+      }
       if (drag) {
         toNdc(e);
         const a = pointerAngle();
@@ -834,10 +863,16 @@ class TemporalProjector extends HTMLElement {
         this.dialSpring.vel = 0;
         return;
       }
-      if (!pressed && e.pointerType === 'mouse') this.canvas.style.cursor = pick(e) ? 'pointer' : this.table ? '' : 'grab';
+      if (!pressed && e.pointerType === 'mouse') this.canvas.style.cursor = pick(e) ? 'pointer' : !this.table || (movable() && hitsBody(e)) ? 'grab' : '';
     });
 
     const end = () => {
+      if (move) {
+        move = null; this.rigVel.set(0, 0, 0);
+        this.canvas.style.cursor = 'grab';
+        this.clicker.play(0.14, 520);                                   // and set down
+        this.dispatchEvent(new CustomEvent('scenechange', { detail: clone(this.sceneCfg) }));
+      }
       if (drag) {
         if (!drag.moved) this.setDate(DATES[(this.state.index + 1) % DATES.length].label);
         else this.setDate(DATES[this._nearest(this.dialSpring.v)].label);

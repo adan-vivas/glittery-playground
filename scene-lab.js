@@ -105,8 +105,7 @@ for (const [title, rows] of CONTROLS) {
     }
   }
 }
-body.insertAdjacentHTML('beforeend', `<label class="check"><input type="checkbox" data-move> Drag the projector to place it</label>
-  <p class="note">Only while the lab is open. Visitors can't move it.</p>
+body.insertAdjacentHTML('beforeend', `<p class="note">Visitors can drag the projector too; this sets where it starts.</p>
   <h3>Overlays</h3>
   <label class="check"><input type="checkbox" data-ov="grid" checked> Table grid (5 cm)</label>
   <label class="check"><input type="checkbox" data-ov="room" checked> Room box</label>
@@ -243,25 +242,9 @@ device.tickers.add(() => {
   }
 });
 
-// Drag to place: with the box ticked, pressing on the projector picks it up and moves it across the table.
-let moving = null;
-addEventListener('pointerdown', (e) => {
-  if (!body.querySelector('[data-move]').checked || (e.target instanceof Node && root.contains(e.target)) || e.button !== 0) return;
-  const rc = device.getBoundingClientRect(), ray = new THREE.Raycaster();
-  ray.setFromCamera(new THREE.Vector2((e.clientX - rc.left) / rc.width * 2 - 1, -(e.clientY - rc.top) / rc.height * 2 + 1), device.camera);
-  if (!ray.intersectObject(device.deviceRoot, true).length) return;
-  const hit = device.floorRay(e.clientX, e.clientY), d = device.getScene().device;
-  if (!hit) return;
-  moving = { id: e.pointerId, dx: d.x - hit.x, dz: d.z - hit.z };
-  e.preventDefault(); e.stopPropagation();
-}, true);
-addEventListener('pointermove', (e) => {
-  if (!moving || e.pointerId !== moving.id) return;
-  const hit = device.floorRay(e.clientX, e.clientY); if (!hit) return;
-  device.setScene({ device: { x: +(hit.x + moving.dx).toFixed(3), z: +(hit.z + moving.dz).toFixed(3) } }); sync();
-  e.stopPropagation();
-}, true);
-addEventListener('pointerup', (e) => { if (moving && e.pointerId === moving.id) { moving = null; store.set(CURRENT, current()); e.stopPropagation(); } }, true);
+// Dragging the projector on the page moves these sliders too, and is remembered as your working view.
+device.addEventListener('scenechange', () => { sync(); store.set(CURRENT, current()); });
+device.addEventListener('devicemove', () => sync());
 
 // start from what you were last looking at
 const last = store.get(CURRENT, null);
