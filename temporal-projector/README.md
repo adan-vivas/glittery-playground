@@ -43,10 +43,14 @@ Then open <http://localhost:4317>.
 <temporal-projector date="2026"></temporal-projector>
 ```
 
-- **Attributes:** `date` (`1996` `2006` `2016` `2026` `FUTURE`), `power` (`on`/`off`), `zoom`, `muted`, `src`, `shadow`
+- **Attributes:** `date` (`1996` `2006` `2016` `2026` `FUTURE`), `power` (`on`/`off`), `zoom`, `muted`, `src`, `shadow`,
+  `table` (a fixed view down onto a desk, lit from the top left, shadows on the page colour; no orbiting)
+- **Table placement** (CSS custom properties): `--stage-x`, `--stage-y` (where the device sits, as fractions of the element),
+  `--stage-scale` (its size, as a fraction of the element's height)
 - **Events:** `datechange` → `{ date, projected, label, future }`, `powerchange` → `{ on }`
 - **Methods:** `setDate(label)`, `randomFuture()`, `togglePower()`, `setContent({ dates, futures })`,
-  `anchor(part)` (screen position of `power`, `key`, `dial`, `lens` or `hologram`), `hologramHit(x, y)`
+  `anchor(part)` (screen position of `power`, `key`, `dial`, `lens` or `hologram`), `hologramHit(x, y)`,
+  `footprint()` (the device's outline on screen, so things on the page can bump into it)
 
 Give the hologram pictures with `setContent`. Images are URLs (data URLs work). `sheet` plays a
 sprite sheet, `mask` cuts out a subject (its green channel), `focus` keeps a point in view, and

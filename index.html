@@ -21,7 +21,12 @@
   .sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; margin: 0; }
 
   /* The device: the whole stage. The component sizes itself to this box and keeps the device and its hologram in frame. */
-  temporal-projector { position: fixed; inset: 0; width: 100%; height: 100%; min-height: 0; z-index: 0; font-family: inherit; }
+  /* The table: the device stands on the page itself, and the whole screen is the desk. The stage variables place it. */
+  :root { --m: clamp(16px, 2.7vw, 52px); }
+  temporal-projector { position: fixed; inset: 0; width: 100%; height: 100%; min-height: 0; z-index: 0; font-family: inherit;
+    --stage-x: .32; --stage-y: .56; --stage-scale: .22; }
+  @media (min-aspect-ratio: 16/10) { temporal-projector { --stage-x: .4; } }   /* wide and short: step clear of the text, so the hologram has the sky to itself */
+  @media (max-width: 1023px) { temporal-projector { --stage-x: .5; --stage-y: .6; --stage-scale: .19; } }
   temporal-projector:focus-visible { box-shadow: none; outline: 2px solid var(--ink); outline-offset: -8px; border-radius: 16px; }
 
   /* Power hint: sits over the I/O button until the device is first switched on. It is a real button too. */
@@ -62,15 +67,15 @@
   .lbl > span { display: inline-flex; align-items: center; gap: 6px; grid-area: 1 / 1; opacity: 0; translate: 0 5px; filter: blur(2px); }
   .lbl > span.on { opacity: 1; translate: 0 0; filter: none; }
 
-  #top { position: fixed; left: 24px; top: 22px; z-index: 1; color: var(--ink); pointer-events: none; }
-  #brand h1 { margin: 0; font-size: 16px; font-weight: 600; letter-spacing: -.01em; }
-  #brand p { margin: 6px 0 0; max-width: 360px; font-size: 16px; font-weight: 400; line-height: 1.45; color: rgba(19, 19, 26, .62); text-wrap: pretty; }
+  /* Type: the name small, the line about the work large, the contacts quiet and airy */
+  #top { position: fixed; left: var(--m); top: var(--m); z-index: 1; color: var(--ink); pointer-events: none; }
+  #brand h1 { margin: 0; font-size: 17px; font-weight: 500; line-height: 1.2; letter-spacing: -.01em; }
+  #brand p { margin: clamp(28px, 6.5vh, 80px) 0 0; font-size: clamp(21px, 1.45vw, 28px); font-weight: 450; line-height: 1.32; letter-spacing: -.015em; text-wrap: balance; }
 
   /* Contacts: the network's name, the handle on hover */
-  #contact { position: fixed; left: 24px; bottom: 22px; z-index: 1; display: flex; flex-direction: column; align-items: flex-start; gap: 2px; pointer-events: auto; }
-  #contact a { position: relative; display: grid; height: 24px; align-items: center; color: var(--ink); text-decoration: none; font-size: 14px; font-weight: 500; overflow: hidden; border-radius: 4px; }
+  #contact { position: fixed; left: var(--m); bottom: var(--m); z-index: 1; display: flex; flex-direction: column; align-items: flex-start; gap: clamp(6px, 2.6vh, 34px); pointer-events: auto; }
+  #contact a { position: relative; display: grid; height: 24px; align-items: center; color: var(--ink); text-decoration: none; font-size: 17px; font-weight: 450; overflow: hidden; border-radius: 4px; }
   #contact a > span { grid-area: 1 / 1; white-space: nowrap; }
-  #contact .nm { opacity: .62; }
   #contact .hd { opacity: 0; translate: 0 100%; }
   #contact a:hover .nm, #contact a:focus-visible .nm { opacity: 0; translate: 0 -100%; }
   #contact a:hover .hd, #contact a:focus-visible .hd { opacity: 1; translate: 0 0; }
@@ -145,13 +150,14 @@
   /* Narrow screens. Name, intro and contacts on top; the device fills the rest; Talk to me docks at the bottom with the ball to its left. */
   @media (max-width: 599px) {
     #top { left: 16px; right: 16px; top: 16px; }
-    #brand p { margin-top: 4px; font-size: 16px; max-width: 34ch; }
-    #contact { position: relative; left: auto; bottom: auto; flex-direction: row; gap: 14px; margin-top: 12px; }
-    #contact .nm { opacity: .8; }
+    #brand h1 { font-size: 16px; }
+    #brand p { margin-top: 14px; font-size: 21px; }
+    #contact { position: relative; left: auto; bottom: auto; flex-direction: row; gap: 16px; margin-top: 14px; }
+    #contact a { font-size: 16px; }
     #contact .hd { display: none; }
     #contact a::after { content: ""; position: absolute; inset: -10px -6px; }   /* 44px tall touch targets, no overlap with the 14px gaps */
     #contact a { overflow: visible; }
-    temporal-projector { top: var(--stage-top, 150px); bottom: 64px; height: auto; }
+    temporal-projector { --stage-y: .62; --stage-scale: .17; }
   }
 
   /* Short screens: the note tightens so the whole sheet, button included, fits on screen */
@@ -175,11 +181,11 @@
 <noscript><style>.pre #pill, .pre #brand, .pre #contact { opacity: 1; scale: 1; filter: none; } #ball, #hint, temporal-projector { display: none; }</style></noscript>
 </head>
 <body>
-<temporal-projector power="off" date="2026"></temporal-projector>
+<temporal-projector table power="off" date="2026"></temporal-projector>
 <button type="button" id="hint" class="idle" aria-label="Switch the projector on"><span>Press I/O<kbd> or P</kbd></span><i aria-hidden="true"></i></button>
 <a id="pill" href="https://cal.com/adanvivas/intro-call" target="_blank" rel="noopener" draggable="false"><span class="lbl"><span data-k="talk" class="on">Talk to me</span><span data-k="work" aria-hidden="true">View work</span><span data-k="crumple" aria-hidden="true">↩&#xFE0E; Crumple</span></span><span class="sr"> (opens in a new tab)</span></a>
 <div id="top">
-  <header id="brand"><h1>Adán Vivas</h1><p>Adán is a founding product designer working on 0&#8239;→&#8239;1 early&#8209;stage startups.</p></header>
+  <header id="brand"><h1>Adán Vivas</h1><p>Founding product designer for<br> 0&#8239;→&#8239;1 early&#8209;stage startups</p></header>
   <nav id="contact" class="ui" aria-label="Contact">
     <a href="https://x.com/adanvivasux" target="_blank" rel="noopener" aria-label="X, @adanvivasux (opens in a new tab)"><span class="nm">X</span><span class="hd" aria-hidden="true">@adanvivasux</span></a>
     <a href="https://www.linkedin.com/in/adanrvivas" target="_blank" rel="noopener" aria-label="LinkedIn, adanrvivas (opens in a new tab)"><span class="nm">LinkedIn</span><span class="hd" aria-hidden="true">in/adanrvivas</span></a>
@@ -251,8 +257,6 @@
     }
   }
   function layout() {
-    const top = $('top').getBoundingClientRect();
-    document.documentElement.style.setProperty('--stage-top', Math.round(top.bottom + 8) + 'px');
     document.documentElement.style.setProperty('--dock', (innerHeight - 44) + 'px');
   }
   layout(); addEventListener('resize', layout);
@@ -490,6 +494,36 @@
   function peelTo(c) { if (c) { if (PE.p < .02 || PE.side !== c) { PE.cu = c === 'tl' ? 0 : 1; PE.cv = 0; } if (PE.side !== c) sfx.rustle(.07, .35); PE.side = c; PE.to = 1; } else { PE.to = 0; PE.side = null; } }
   function finishClose() { pmode = 'ball'; B.x = from.x; B.y = from.y; B.q = qFrom; B.lift = .9; B.lv = 0; SP.t = 0; SP.c = 1; PE.p = PE.v = PE.to = 0; PE.side = null; sfx.paperHit(.35); repoint(); if (refocus) { refocus = false; ballBtn.focus({ preventScroll: true }); } }
 
+  // The projector stands on the same table. Its outline on screen is a wall the ball crumples against, like the window edges.
+  function nearestOnPoly(px, py, poly) {
+    let best = null, inside = true, cx = 0, cy = 0;
+    poly.forEach(p => { cx += p[0] / poly.length; cy += p[1] / poly.length; });
+    for (let i = 0; i < poly.length; i++) {
+      const a = poly[i], b = poly[(i + 1) % poly.length], ex = b[0] - a[0], ey = b[1] - a[1], l2 = ex * ex + ey * ey || 1;
+      const t = clamp(((px - a[0]) * ex + (py - a[1]) * ey) / l2, 0, 1), qx = a[0] + ex * t, qy = a[1] + ey * t, d = Math.hypot(px - qx, py - qy);
+      let nx = -ey, ny = ex; if (nx * (a[0] - cx) + ny * (a[1] - cy) < 0) { nx = -nx; ny = -ny; }   // outward
+      if ((px - a[0]) * nx + (py - a[1]) * ny > 0) inside = false;
+      if (!best || d < best.d) { const nl = Math.hypot(nx, ny) || 1; best = { d, qx, qy, nx: nx / nl, ny: ny / nl }; }
+    }
+    return { ...best, inside };
+  }
+  function bumpDevice() {
+    const poly = device.footprint && device.footprint(); if (!poly || poly.length < 3) return;
+    const n = nearestOnPoly(B.x, B.y, poly), r = B.r * .92;
+    let nx = n.nx, ny = n.ny, pen;
+    if (n.inside) pen = n.d + r;
+    else { if (n.d >= r) return; nx = (B.x - n.qx) / (n.d || 1); ny = (B.y - n.qy) / (n.d || 1); pen = r - n.d; }
+    B.x += nx * pen; B.y += ny * pen;
+    const vn = -(B.vx * nx + B.vy * ny); if (vn <= 0) return;           // already moving away
+    const tx = -ny, ty = nx, vt = B.vx * tx + B.vy * ty;
+    if (vn < 20) { B.vx = tx * vt; B.vy = ty * vt; return; }
+    const out = vn * (.16 + Math.random() * .14), slide = vt * .55 + (Math.random() - .5) * vn * .35;   // dead bounce, scuffed sideways
+    B.vx = nx * out + tx * slide; B.vy = ny * out + ty * slide;
+    const kick = vn / B.r * .9; B.wx += (Math.random() - .5) * kick; B.wy += (Math.random() - .5) * kick; B.wz += (Math.random() - .5) * kick * 1.4;
+    B.nx = nx; B.ny = ny; B.sq = Math.min(.3, vn / 2800); B.sqv = 0; B.lv += Math.min(5, vn / 450);
+    sfx.paperHit(vn / 1400 * 1.2); sfx.thud(vn / 1800);                // paper on aluminium: the crinkle and a little knock
+  }
+
   // Springs: a little underdamped, so the paper overshoots by a hair and settles, the way a real sheet does.
   function spring(x, v, to, k, d, dt) { const n = Math.max(1, Math.ceil(dt / (1 / 240))), h = dt / n; for (let i = 0; i < n; i++) { v += (-k * (x - to) - d * v) * h; x += v * h; } return [x, v]; }
 
@@ -572,6 +606,7 @@
           sfx.paperHit(vn / 1400);
         };
         hit('x', 'vx', 'vy', B.r, vw - B.r, 1, 0); hit('y', 'vy', 'vx', B.r, vh - B.r, 0, 1);
+        bumpDevice();
       }
       // Tumble: spin chases rolling contact, but a lumpy ball catches on its high spots, so it rolls in fits and rocks to a stop.
       const sp = Math.hypot(B.vx, B.vy), lump = .45 + .55 * Math.abs(Math.sin(B.ph));

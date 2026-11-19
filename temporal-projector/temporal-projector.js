@@ -7,12 +7,12 @@
 //   <temporal-projector date="2026"></temporal-projector>
 //
 // Attributes: date (1996|2006|2016|2026|FUTURE), power (on|off), zoom (boolean), muted (boolean),
-//             src (GLB url), shadow (shadow PNG url)
+//             src (GLB url), shadow (shadow PNG url), table (fixed desk view; place it with --stage-x/-y/-scale)
 // Events:     "datechange"  detail { date, projected, label, future }
 //             "powerchange" detail { on }
 // Methods:    setDate(label), randomFuture(), togglePower(),
 //             setContent({ dates, futures }) — pictures for the hologram (see the method),
-//             anchor(part) — client px of power|key|dial|lens|hologram, hologramHit(x, y)
+//             anchor(part) — client px of power|key|dial|lens|hologram, hologramHit(x, y), footprint()
 
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
@@ -43,6 +43,9 @@ const HOLO = {
   w: 0.056, h: 0.074,  // image plane
 };
 HOLO.top = HOLO.gap + HOLO.h;
+// table view: what the camera looks at, and the radius that --stage-scale sizes
+const TABLE_TARGET = new THREE.Vector3(0.002, 0.013, 0.006);
+const TABLE_RADIUS = 0.07;
 // Colours are sRGB triplets written straight to the framebuffer: the hologram is light, not a lit surface.
 const HOLO_INK = new THREE.Vector3(0.11, 0.18, 1.0);       // the homepage's dither blue
 const HOLO_SIGNAL = new THREE.Vector3(1.0, 0.23, 0.055);   // FUTURE orange
@@ -218,7 +221,7 @@ function softboxTexture() {
   return t;
 }
 
-function studioEnvironment(renderer) {
+function studioEnvironment(renderer, table = false) {
   const env = new THREE.Scene();
   const basic = (c, side = THREE.FrontSide, map = null) => new THREE.MeshBasicMaterial({ color: c, side, map });
   // dim room, gradient from darker ceiling to the lit table plane
@@ -239,6 +242,7 @@ function studioEnvironment(renderer) {
   panel(11, 5, [1, 5.5, -6], 4.2, [0.97, 0.98, 1]);       // top-back softbox
   panel(7, 5, [6.5, 2.2, 3.5], 2.2);                      // fill
   panel(3, 1.5, [4.5, 1.0, -3.5], 1.5);                   // kicker
+  if (table) panel(7, 5, [-3.4, 6.2, -4.0], 1.3, [1, 0.99, 0.97]);   // table view: the top-left window the device's top mirrors
   const pmrem = new THREE.PMREMGenerator(renderer);
   const tex = pmrem.fromScene(env, 0.012).texture;
   pmrem.dispose();
@@ -393,7 +397,7 @@ class TemporalProjector extends HTMLElement {
     if (!this.renderer) return;
     if (name === 'date') this.setDate(val);
     if (name === 'power') this._setPower(val !== 'off');
-    if (name === 'zoom') this.controls.enableZoom = val !== null;
+    if (name === 'zoom' && !this.table) this.controls.enableZoom = val !== null;
     if (name === 'muted') this.clicker.muted = val !== null;
   }
 
@@ -408,11 +412,17 @@ class TemporalProjector extends HTMLElement {
     renderer.setClearColor(0x000000, 0);
 
     const scene = this.scene = new THREE.Scene();
-    scene.environment = studioEnvironment(renderer);
+    this.table = this.hasAttribute('table');
+    scene.environment = studioEnvironment(renderer, this.table);
     scene.environmentIntensity = 1.0;
+
+    // Table view (the `table` attribute): a fixed camera looking down at the desk the device stands on,
+    // lit from the top left of the screen, with real shadows falling on a transparent floor, so the page colour is the table.
+    if (this.table) renderer.shadowMap.type = THREE.PCFShadowMap;   // honours shadow.radius: a softer, wider shadow
 
     const camera = this.camera = new THREE.PerspectiveCamera(22, 1, 0.01, 5);
     const controls = this.controls = new OrbitControls(camera, this.canvas);
+    controls.enabled = !this.table;
     // framed for the device, the table projection and the hologram above the lens
     controls.target.set(-0.004, 0.056, 0.006);
     camera.position.set(-0.215, 0.255, 0.40);
@@ -435,6 +445,28 @@ class TemporalProjector extends HTMLElement {
     key.shadow.bias = -0.00008;
     key.shadow.normalBias = 0.0002;
     scene.add(key, key.target);
+
+    if (this.table) {
+      // seen from the front right, about 50° above the table
+      const az = THREE.MathUtils.degToRad(40), el = THREE.MathUtils.degToRad(50);
+      this.viewDir = new THREE.Vector3(Math.sin(az) * Math.cos(el), Math.sin(el), Math.cos(az) * Math.cos(el));
+      controls.target.copy(TABLE_TARGET);
+      // the light stands where the top left corner of the screen meets the table, high up
+      const away = new THREE.Vector3(-this.viewDir.x, 0, -this.viewDir.z).normalize();
+      const left = new THREE.Vector3(-this.viewDir.z, 0, this.viewDir.x).normalize();
+      key.position.copy(TABLE_TARGET).addScaledVector(away, 0.2).addScaledVector(left, 0.3).add(new THREE.Vector3(0, 0.34, 0));
+      key.target.position.copy(TABLE_TARGET);
+      key.intensity = 1.35;
+      Object.assign(key.shadow.camera, { left: -0.16, right: 0.16, top: 0.16, bottom: -0.16, near: 0.1, far: 1 });
+      key.shadow.mapSize.set(1024, 1024);
+      key.shadow.radius = 9;
+      key.shadow.bias = -0.0002;
+      const floor = new THREE.Mesh(new THREE.PlaneGeometry(4, 4), new THREE.ShadowMaterial({ color: 0x1c1a2e, opacity: 0.3 }));
+      floor.rotation.x = -Math.PI / 2;
+      floor.position.y = -0.0002;
+      floor.receiveShadow = true;
+      scene.add(floor);
+    }
 
     const base = new URL('./assets/', import.meta.url);
     const src = this.getAttribute('src') || new URL('zeitlinse.glb', base).href;
@@ -464,6 +496,7 @@ class TemporalProjector extends HTMLElement {
       o.receiveShadow = true;
     });
     scene.add(device);
+    this.deviceBox = new THREE.Box3().setFromObject(device);
     this.dial = device.getObjectByName('dial');
     this.key = device.getObjectByName('prf_key');
     this.powerBtn = device.getObjectByName('power_button');
@@ -535,6 +568,8 @@ class TemporalProjector extends HTMLElement {
     const w = this.clientWidth || 1, h = this.clientHeight || 1;
     this.renderer.setSize(w, h, false);
     this.camera.aspect = w / h;
+    this._footprint = null;
+    if (this.table) return this._frameTable(w, h);
     // keep the whole device, projection and hologram in frame at any aspect ratio
     // (the scene is taller than it is wide, so tall screens fit to its width and wide screens to its height)
     const rv = 0.1, rh = 0.076, vfov = THREE.MathUtils.degToRad(this.camera.fov);
@@ -544,6 +579,42 @@ class TemporalProjector extends HTMLElement {
     this.camera.position.copy(this.controls.target).addScaledVector(dir, dist);
     this.controls.maxDistance = Math.max(dist * 1.6, 0.4);
     this.camera.updateProjectionMatrix();
+  }
+
+  // The page places the device with custom properties on the element:
+  //   --stage-x, --stage-y  where the device's centre sits, as fractions of the element (default .5, .55)
+  //   --stage-scale         device radius as a fraction of the element's height (default .16), never wider than 42% of its width
+  _frameTable(w, h) {
+    const cs = getComputedStyle(this), num = (n, d) => { const v = parseFloat(cs.getPropertyValue(n)); return Number.isFinite(v) ? v : d; };
+    const fx = num('--stage-x', 0.5), fy = num('--stage-y', 0.55), sc = num('--stage-scale', 0.16);
+    const pr = Math.min(h * sc, w * 0.42), tan = Math.tan(THREE.MathUtils.degToRad(this.camera.fov) / 2);
+    const dist = TABLE_RADIUS * (h / 2) / (pr * tan);
+    this.camera.position.copy(TABLE_TARGET).addScaledVector(this.viewDir, dist);
+    this.camera.lookAt(TABLE_TARGET);
+    this.camera.setViewOffset(w, h, (0.5 - fx) * w, (0.5 - fy) * h, w, h);
+    this.camera.updateProjectionMatrix();
+    this.camera.updateMatrixWorld();
+  }
+
+  // The device's outline on screen (client px, convex, clockwise on screen), for pages that let things bump into it.
+  footprint() {
+    if (!this.renderer || !this.deviceBox) return null;
+    if (this._footprint) return this._footprint;
+    const b = this.deviceBox, r = 0.012, pts = [];
+    const rect = this.getBoundingClientRect(), v = new THREE.Vector3();
+    const corners = [[b.max.x - r, b.max.z - r, 0], [b.min.x + r, b.max.z - r, 1], [b.min.x + r, b.min.z + r, 2], [b.max.x - r, b.min.z + r, 3]];
+    for (const y of [0, b.max.y]) for (const [cx, cz, q] of corners) for (let k = 0; k <= 6; k++) {
+      const a = (q + k / 6) * Math.PI / 2;
+      v.set(cx + Math.cos(a) * r, y, cz + Math.sin(a) * r).project(this.camera);
+      pts.push([rect.left + (v.x + 1) / 2 * rect.width, rect.top + (1 - v.y) / 2 * rect.height]);
+    }
+    // convex hull, monotone chain
+    pts.sort((p, q) => p[0] - q[0] || p[1] - q[1]);
+    const cross = (o, a, c) => (a[0] - o[0]) * (c[1] - o[1]) - (a[1] - o[1]) * (c[0] - o[0]);
+    const lo = [], hi = [];
+    for (const p of pts) { while (lo.length >= 2 && cross(lo[lo.length - 2], lo[lo.length - 1], p) <= 0) lo.pop(); lo.push(p); }
+    for (const p of pts.reverse()) { while (hi.length >= 2 && cross(hi[hi.length - 2], hi[hi.length - 1], p) <= 0) hi.pop(); hi.push(p); }
+    return (this._footprint = lo.slice(0, -1).concat(hi.slice(0, -1)));
   }
 
   // ---------------------------------------------------------------- input
@@ -603,7 +674,7 @@ class TemporalProjector extends HTMLElement {
         this.dialSpring.vel = 0;
         return;
       }
-      if (!pressed && e.pointerType === 'mouse') this.canvas.style.cursor = pick(e) ? 'pointer' : 'grab';
+      if (!pressed && e.pointerType === 'mouse') this.canvas.style.cursor = pick(e) ? 'pointer' : this.table ? '' : 'grab';
     });
 
     const end = () => {
@@ -620,7 +691,7 @@ class TemporalProjector extends HTMLElement {
         if (pressed === this.powerBtn) this.togglePower();
         pressed = null;
       }
-      this.controls.enabled = true;
+      this.controls.enabled = !this.table;
     };
     this.canvas.addEventListener('pointerup', end);
     this.canvas.addEventListener('pointercancel', end);
@@ -850,7 +921,8 @@ class TemporalProjector extends HTMLElement {
     const t = reduceMotion ? 0 : now / 1000;
     // the image turns to face the camera around its vertical axis
     const cam = this.camera.position;
-    h.image.rotation.y = Math.atan2(cam.x - HOLO.lens.x, cam.z - HOLO.lens.z);
+    if (this.table) h.image.quaternion.copy(this.camera.quaternion);   // a fixed view: face the camera squarely
+    else h.image.rotation.y = Math.atan2(cam.x - HOLO.lens.x, cam.z - HOLO.lens.z);
     if (h.b) {
       const m = Math.min(1, (now - h.mixStart) / (reduceMotion ? 1 : 520));
       u.uMix.value = m * m * (3 - 2 * m);
@@ -959,7 +1031,7 @@ class TemporalProjector extends HTMLElement {
     this._applyLights(this.lightSpring.v);
     const flicker = this.state.power ? 1 - 0.025 * Math.random() : 1;
     this.proj.material.opacity = 0.48 * this.projFade.v * flicker;
-    this.controls.update();
+    if (!this.table) this.controls.update();
     this._tickHologram(dt, performance.now());
     this.renderer.render(this.scene, this.camera);
   }
