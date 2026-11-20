@@ -47,6 +47,7 @@ const css = `
 #scene-lab h3 { margin: 14px 0 6px; font-size: 11px; letter-spacing: .06em; text-transform: uppercase; color: rgba(19,19,26,.5); font-weight: 600; }
 #scene-lab .row { display: grid; grid-template-columns: 92px 1fr 46px; align-items: center; gap: 8px; min-height: 26px; }
 #scene-lab .row input[type=range] { width: 100%; accent-color: #1c2eff; }
+#scene-lab .row input[type=color] { width: 100%; height: 22px; padding: 0; border: 0; background: none; cursor: pointer; }
 #scene-lab .row output { text-align: right; font-variant-numeric: tabular-nums; color: rgba(19,19,26,.7); }
 #scene-lab .check { display: flex; align-items: center; gap: 8px; min-height: 26px; }
 #scene-lab .btns { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
@@ -74,6 +75,18 @@ const CONTROLS = [
     ['room.cove', 'Floor sweep m', 0.01, 0.8, 0.005], ['room.round', 'Corner round m', 0.01, 1.5, 0.01],
     ['room.shade', 'Wall shade', 0, 0.4, 0.005], ['room.corner', 'Bend shade', 0, 0.5, 0.005],
   ]],
+  ['Look', [
+    ['look.agx', 'AgX filmic (off: Neutral)', 'bool'], ['look.exposure', 'Exposure', 0.3, 2.5, 0.01],
+    ['look.env', 'Reflections', 0, 3, 0.01], ['look.room', 'Studio walls', 0, 0.8, 0.01], ['look.flags', 'Black flags', 'bool'],
+  ]],
+  ['Case', [
+    ['shell.color', 'Colour', 'color'], ['shell.metalness', 'Metalness', 0, 1, 0.01], ['shell.roughness', 'Roughness', 0, 1, 0.01], ['shell.specular', 'Specular', 0, 2, 0.01],
+    ['shell.clearcoat', 'Clear coat', 0, 1, 0.01], ['shell.coatRoughness', 'Coat roughness', 0, 1, 0.01],
+    ['shell.sheen', 'Sheen', 0, 1, 0.01], ['shell.ao', 'Contact shadow (AO)', 0, 2, 0.01],
+  ]],
+  ['Dial (aluminium)', [
+    ['dial.roughness', 'Roughness', 0, 1, 0.01],
+  ]],
   ['Paper', [
     ['paper.radius', 'Ball radius m', 0.005, 0.03, 0.0005], ['paper.hold', 'Held height m', 0.03, 0.5, 0.005], ['paper.gravity', 'Gravity m/s²', 0.5, 15, 0.1],
     ['paper.friction', 'Friction', 0, 2, 0.01], ['paper.drag', 'Table drag', 0, 10, 0.1], ['paper.air', 'Air drag', 0, 4, 0.05], ['paper.bounce', 'Bounce', 0, 0.9, 0.01],
@@ -97,7 +110,9 @@ body.insertAdjacentHTML('beforeend', `<h3>Fixtures</h3><select data-fixtures ari
 for (const [title, rows] of CONTROLS) {
   body.insertAdjacentHTML('beforeend', `<h3>${title}</h3>`);
   for (const [path, label, min, max, step, nullable] of rows) {
-    if (min === 'bool') {
+    if (min === 'color') {
+      body.insertAdjacentHTML('beforeend', `<div class="row"><label for="lab-${path}">${label}</label><input id="lab-${path}" type="color" data-path="${path}"><output data-out="${path}"></output></div>`);
+    } else if (min === 'bool') {
       body.insertAdjacentHTML('beforeend', `<label class="check"><input type="checkbox" data-path="${path}"> ${label}</label>`);
     } else {
       body.insertAdjacentHTML('beforeend', `<div class="row"><label for="lab-${path}">${label}${nullable ? ' <input type="checkbox" data-auto="' + path + '" title="Set by hand (unchecked: the page decides)">' : ''}</label>
@@ -123,6 +138,7 @@ function sync() {
   for (const el of body.querySelectorAll('[data-path]')) {
     const v = get(cfg, el.dataset.path);
     if (el.type === 'checkbox') el.checked = !!v;
+    else if (el.type === 'color') { el.value = v ?? el.value; const o = body.querySelector(`[data-out="${el.dataset.path}"]`); if (o) o.textContent = v ?? ''; continue; }
     else { el.value = v ?? el.value; el.disabled = v == null && !!body.querySelector(`[data-auto="${el.dataset.path}"]`); }
     const out = body.querySelector(`[data-out="${el.dataset.path}"]`);
     if (out) out.textContent = v == null ? 'auto' : (+v).toFixed(+el.step < .01 ? 3 : +el.step < 1 ? 2 : 0);
@@ -135,7 +151,7 @@ function setPath(path, value) {
 }
 body.addEventListener('input', (e) => {
   const el = e.target;
-  if (el.dataset.path) setPath(el.dataset.path, el.type === 'checkbox' ? el.checked : +el.value);
+  if (el.dataset.path) setPath(el.dataset.path, el.type === 'checkbox' ? el.checked : el.type === 'color' ? el.value : +el.value);
   if (el.dataset.auto) {
     const range = body.querySelector(`input[type=range][data-path="${el.dataset.auto}"]`);
     setPath(el.dataset.auto, el.checked ? +range.value : null);

@@ -358,7 +358,7 @@ import * as THREE from 'three';
   // and unfolds in the air, held facing you; once flat, the DOM letter lays its crisp text and real button over the sheet.
   // Closing crumples it where it hangs, and it drops onto the table below. PAPER holds the physical numbers; the scene lab
   // (?lab) changes them, and the camera, live.
-  const PAPER = { radius: 0.012, hold: 0.12, sheet: 0.1, gravity: 4.5, friction: 0.3, drag: 3, air: 0.6, bounce: 0.22, lift: 0.025, throw: 1, toss: 0.8, fill: 1.1, key: 1, front: 1.9 };
+  const PAPER = { radius: 0.0155, hold: 0.115, sheet: 0.1, gravity: 4.5, friction: 0.72, drag: 3, air: 0.6, bounce: 0.1, lift: 0.025, throw: 1.05, toss: 1.85, fill: 1.95, key: 1.05, front: 0.7 };
   const letter = $('letter'), sheetEl = letter.querySelector('.paper'), ballBtn = $('ball'), ballcap = $('ballcap');
   const GX = 36, GY = 50, NV = (GX + 1) * (GY + 1);
   const h2 = (x, y) => { const n = Math.sin(x * 127.1 + y * 311.7) * 43758.5453; return n - Math.floor(n); };

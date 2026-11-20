@@ -25,19 +25,22 @@ const DATES = [
   { label: '2026', angle: 30 },
   { label: 'FUTURE', angle: -30 },
 ];
-const BAKED_POINTER = 30;           // pointer angle baked into the dial geometry
+// ZL 2: the "dial" is the fluted crown on the right end. Date "angles" are kept as abstract
+// detent positions; the crown rolls CROWN_ROLL degrees per unit about its own (x) axis.
+const CROWN_ROLL = 1.5;
+const CROWN_DRAG = 0.9;             // detent units per px of vertical drag (up = later)
 const MIN_A = -30, MAX_A = 210;
-const TOP_Y = 0.026;                // top surface height (m)
-const DIAL_C = new THREE.Vector3(0.025, TOP_Y + 0.0075, -0.0075);
-const LED_P = new THREE.Vector3(0.010, TOP_Y + 0.0003, -0.0265);
-const FRONT_LENS_P = new THREE.Vector3(0.031, 0.011, 0.0362);
-const PROJ_P = new THREE.Vector3(0.030, 0.0002, 0.065);
+const TOP_Y = 0.021;                // top surface height (m)
+const POWER_SLIDE = 0.0088;         // the power knob slides this far right when on
+const LED_P = new THREE.Vector3(0.0255, TOP_Y - 0.0023, -0.014);    // green strip the knob uncovers
+const APERTURE_P = new THREE.Vector3(0.0, 0.011, 0.0312);           // front projection lens, centred
+const PROJ_P = new THREE.Vector3(0.0, 0.0002, 0.066);               // where it throws the year on the table
 const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
 
 // The hologram rises from the top lens: a cone of light, and a dithered image floating inside it.
 const HOLO = {
-  lens: new THREE.Vector3(-0.026, TOP_Y + 0.0006, -0.002),
-  r0: 0.0075,          // beam radius at the lens
+  lens: new THREE.Vector3(-0.024, TOP_Y + 0.0006, -0.0025),
+  r0: 0.0096,          // beam radius at the lens
   r1: 0.036,           // beam radius at the top of the image
   gap: 0.016,          // lens to the bottom of the image
   w: 0.056, h: 0.074,  // image plane
@@ -57,11 +60,20 @@ const TABLE_RADIUS = 0.07;
 //           walls along a cove of radius `cove`, and the walls meet each other around corners of radius `round`, like a
 //           photo studio. The walls get `shade` darker toward the top of the sweep, and `corner` darkens the bend softly.
 //           The parts of the room between the camera and the scene are cut away, like a dollhouse.
+//   look    how it is rendered: `agx` (AgX filmic) or Neutral tone mapping, `exposure`, `env` = strength of the reflected
+//           studio, `room` = brightness of the studio's walls (dark = crisp softbox highlights, light = soft high-key),
+//           `flags` = black cards beside the set that give metal and gloss dark bands to mirror
+//   shell   the case: colour, metalness (0 = moulded plastic, 1 = metal), roughness (lower = sharper reflections), specular strength, clear coat and its
+//           roughness, sheen (soft velvety edge light), ao = strength of the baked contact darkening
+//   dial    the aluminium crown: roughness
 const TABLE_SCENE = {
   camera: { elevation: 32, azimuth: 39, fov: 55, x: null, y: null, scale: 0.16 },
-  light: { azimuth: 56, elevation: 43, intensity: 1.35, softness: 16, opacity: 0.22, area: 0.45, mapSize: 1024 },
-  device: { x: 0, z: 0, rotation: 0 },
-  room: { walls: true, width: 1.3, depth: 1.05, shade: 0.12, corner: 0.1, cove: 0.1, round: 0.18 },
+  light: { azimuth: 84, elevation: 64, intensity: 1.8, softness: 25, opacity: 0.1, area: 0.37, mapSize: 1024 },
+  device: { x: -0.09, z: 0.015, rotation: 5 },
+  room: { walls: true, width: 1.32, depth: 1.29, shade: 0.095, corner: 0, cove: 0.025, round: 0.01 },
+  look: { agx: false, exposure: 0.93, env: 1.5, room: 0.06, flags: false },
+  shell: { color: '#ffffff', metalness: 0.81, roughness: 0.36, specular: 1, clearcoat: 0.48, coatRoughness: 0.61, sheen: 0.31, ao: 0.57 },
+  dial: { roughness: 0.23 },
 };
 const clone = (o) => JSON.parse(JSON.stringify(o));
 
@@ -208,8 +220,8 @@ function coverRect(iw, ih, focus = [0.5, 0.42]) {
 // ------------------------------------------------------------------ materials
 function makeMaterials() {
   const P = (o) => new THREE.MeshPhysicalMaterial(o);
-  return {
-    alu_beadblast: P({ color: 0xd6d7d9, metalness: 1, roughness: 0.36 }),
+  const M = {
+    alu_beadblast: P({ color: 0xcfd0d2, metalness: 1, roughness: 0.3 }),
     alu_polished: P({ color: 0xe6e6e8, metalness: 1, roughness: 0.07 }),
     alu_machined: P({ color: 0xdcdcde, metalness: 1, roughness: 0.16 }),
     alu_knurl: P({ color: 0xd2d3d5, metalness: 1, roughness: 0.24 }),
@@ -225,10 +237,21 @@ function makeMaterials() {
     coated_glass: P({ color: 0xffffff, metalness: 0, roughness: 0, transmission: 1,
       thickness: 0.002, ior: 1.52, iridescence: 1, iridescenceIOR: 1.38,
       iridescenceThicknessRange: [260, 420], specularIntensity: 1 }),
+    body_warm_white: P({ color: 0xece9e2, roughness: 0.52, sheen: 0.25, sheenColor: 0xffffff, sheenRoughness: 0.8 }),
+    trim_grey: P({ color: 0xc9cdd2, roughness: 0.5 }),
+    p_orange: P({ color: 0xf0531f, roughness: 0.42, clearcoat: 0.1, clearcoatRoughness: 0.5,
+      sheen: 0.3, sheenColor: 0xff7a4a, sheenRoughness: 0.6 }),
+    p_black: P({ color: 0x1a1a1b, roughness: 0.55 }),
+    p_black_gloss: P({ color: 0x0b0b0c, roughness: 0.12 }),
+    p_gap: P({ color: 0x040404, roughness: 0.9 }),
+    p_smoke: P({ color: 0x0e0f10, roughness: 0.08, clearcoat: 1, clearcoatRoughness: 0.04 }),
+    power_on: new THREE.MeshStandardMaterial({ color: 0x0a2a0e, emissive: 0x3dff8a, emissiveIntensity: 3 }),
     led_green: new THREE.MeshStandardMaterial({ color: 0x0a2a0e, emissive: 0x3dff6a, emissiveIntensity: 6 }),
     projector_core: new THREE.MeshStandardMaterial({ color: 0x000000, emissive: 0x5d8cff, emissiveIntensity: 3 }),
     front_core: new THREE.MeshStandardMaterial({ color: 0x000000, emissive: 0xffc98a, emissiveIntensity: 5 }),
   };
+  for (const [k, m] of Object.entries(M)) m.name = k;   // the scene lab finds them by name
+  return M;
 }
 
 // A studio built from emissive panels, matching the Cycles light rig.
@@ -248,12 +271,12 @@ function softboxTexture() {
   return t;
 }
 
-function studioEnvironment(renderer, table = false) {
+function studioEnvironment(renderer, table = false, { room = 0.06, flags = false } = {}) {
   const env = new THREE.Scene();
   const basic = (c, side = THREE.FrontSide, map = null) => new THREE.MeshBasicMaterial({ color: c, side, map });
-  // dim room, gradient from darker ceiling to the lit table plane
-  env.add(new THREE.Mesh(new THREE.SphereGeometry(20, 32, 16), basic(new THREE.Color(0.06, 0.06, 0.065), THREE.BackSide)));
-  const floor = new THREE.Mesh(new THREE.CircleGeometry(19, 64), basic(new THREE.Color(0.30, 0.30, 0.30)));
+  // the room the softboxes hang in: dark gives crisp highlights on a dark ground (product look), light gives high-key
+  env.add(new THREE.Mesh(new THREE.SphereGeometry(20, 32, 16), basic(new THREE.Color(room, room, room * 1.02), THREE.BackSide)));
+  const floor = new THREE.Mesh(new THREE.CircleGeometry(19, 64), basic(new THREE.Color().setScalar(Math.max(0.3, room * 1.3))));
   floor.rotation.x = -Math.PI / 2;
   floor.position.y = -0.35;
   env.add(floor);
@@ -269,6 +292,13 @@ function studioEnvironment(renderer, table = false) {
   panel(11, 5, [1, 5.5, -6], 4.2, [0.97, 0.98, 1]);       // top-back softbox
   panel(7, 5, [6.5, 2.2, 3.5], 2.2);                      // fill
   panel(3, 1.5, [4.5, 1.0, -3.5], 1.5);                   // kicker
+  const flag = (w, h, pos) => {                            // negative fill: dark bands for the metal to mirror
+    const m = new THREE.Mesh(new THREE.PlaneGeometry(w, h), basic(new THREE.Color(0.02, 0.02, 0.02), THREE.DoubleSide));
+    m.position.set(...pos);
+    m.lookAt(0, 0, 0);
+    env.add(m);
+  };
+  if (flags) { flag(9, 2.2, [0.8, 0.9, 4.5]); flag(6, 1.8, [4.5, 0.6, -2.5]); }
   if (table) panel(7, 5, [-3.4, 6.2, -4.0], 1.3, [1, 0.99, 0.97]);   // table view: the top-left window the device's top mirrors
   const pmrem = new THREE.PMREMGenerator(renderer);
   const tex = pmrem.fromScene(env, 0.012).texture;
@@ -432,8 +462,8 @@ class TemporalProjector extends HTMLElement {
   async _init() {
     const renderer = this.renderer = new THREE.WebGLRenderer({ canvas: this.canvas, antialias: true, alpha: true });
     renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
-    renderer.toneMapping = THREE.NeutralToneMapping;
-    renderer.toneMappingExposure = 0.92;
+    renderer.toneMapping = THREE.AgXToneMapping;      // filmic roll-off, closer to the Cycles renders
+    renderer.toneMappingExposure = 1.18;
     renderer.shadowMap.enabled = true;
     renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     renderer.setClearColor(0x000000, 0);
@@ -442,6 +472,7 @@ class TemporalProjector extends HTMLElement {
     this.table = this.hasAttribute('table');
     scene.environment = studioEnvironment(renderer, this.table);
     scene.environmentIntensity = 1.0;
+    this._envKey = '0.06|false';
 
     // Table view (the `table` attribute): a fixed camera looking down at the desk the device stands on,
     // lit from the top left of the screen, with real shadows falling on a transparent floor, so the page colour is the table.
@@ -495,9 +526,11 @@ class TemporalProjector extends HTMLElement {
     const base = new URL('./assets/', import.meta.url);
     const src = this.getAttribute('src') || new URL('zeitlinse.glb', base).href;
     const shadowSrc = this.getAttribute('shadow') || new URL('shadow.png', base).href;
-    const [gltf, shadowTex] = await Promise.all([
+    const aoSrc = this.getAttribute('ao') || new URL('ao.jpg', base).href;
+    const [gltf, shadowTex, aoTex] = await Promise.all([
       new GLTFLoader().loadAsync(src),
       new THREE.TextureLoader().loadAsync(shadowSrc),
+      new THREE.TextureLoader().loadAsync(aoSrc).catch(() => null),
     ]);
 
     // baked Cycles contact shadow
@@ -520,16 +553,39 @@ class TemporalProjector extends HTMLElement {
       o.castShadow = o.material !== M.coated_glass;
       o.receiveShadow = true;
     });
+    // baked Cycles ambient occlusion on the body: seams, pockets and wells darken like the real part
+    if (aoTex) {
+      Object.assign(aoTex, { flipY: false, colorSpace: THREE.NoColorSpace, anisotropy: 4 });
+      const lit = new Set([M.front_core, M.projector_core, M.power_on, M.led_green, M.coated_glass]);   // driven live; keep shared
+      device.getObjectByName('body')?.traverse((o) => {
+        if (!o.isMesh || !o.geometry.attributes.uv || lit.has(o.material)) return;
+        o.material = o.material.clone();
+        o.material.aoMap = aoTex;
+        o.material.aoMapIntensity = 1.0;
+      });
+    }
     this.rig.add(device);
     this.deviceRoot = device;
+    this._applyLook();
     this.localBox = new THREE.Box3().setFromObject(device);   // before placement: the projector's own extents
     this._placeDevice();
     this.dial = device.getObjectByName('dial');
     this.key = device.getObjectByName('prf_key');
     this.powerBtn = device.getObjectByName('power_button');
     this.interactive = [this.dial, this.key, this.powerBtn];
+    // generous invisible hit areas, so the controls are easy to catch with a finger or cursor
+    const hitMat = new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false, colorWrite: false });
+    for (const [o, grow] of [[this.dial, 1.7], [this.key, 1.6], [this.powerBtn, 1.6]]) {
+      const b = new THREE.Box3();
+      o.traverse((c) => { if (c.isMesh) { c.geometry.computeBoundingBox(); b.union(c.geometry.boundingBox); } });
+      const size = b.getSize(new THREE.Vector3()).multiplyScalar(grow).max(new THREE.Vector3(0.012, 0.008, 0.012));
+      const hit = new THREE.Mesh(new THREE.BoxGeometry(size.x, size.y, size.z), hitMat);
+      b.getCenter(hit.position);
+      hit.castShadow = hit.receiveShadow = false;
+      o.add(hit);
+    }
     this.keyY = this.key.position.y;
-    this.powerY = this.powerBtn.position.y;
+    this.powerX = this.powerBtn.position.x;
 
     // glows
     const gt = glowTexture();
@@ -541,17 +597,17 @@ class TemporalProjector extends HTMLElement {
       this.rig.add(s);
       return s;
     };
-    this.ledGlow = sprite(0x3dff6a, 0.0042, LED_P);
-    this.frontGlow = sprite(0xffc98a, 0.011, FRONT_LENS_P);
+    this.ledGlow = sprite(0x3dff8a, 0.007, LED_P);
+    this.frontGlow = sprite(0xffc98a, 0.016, APERTURE_P);
 
-    // projected date on the surface
+    // the year, thrown onto the table by the front lens
     this.projCanvas = document.createElement('canvas');
     this.projCanvas.width = 1024;
     this.projCanvas.height = 384;
     this.projTex = new THREE.CanvasTexture(this.projCanvas);
     this.projTex.colorSpace = THREE.SRGBColorSpace;
     this.projTex.anisotropy = 8;
-    this.proj = new THREE.Mesh(new THREE.PlaneGeometry(0.056, 0.021),
+    this.proj = new THREE.Mesh(new THREE.PlaneGeometry(0.050, 0.01875),
       new THREE.MeshBasicMaterial({ map: this.projTex, transparent: true, depthWrite: false,
         blending: THREE.AdditiveBlending, color: new THREE.Color(1.0, 0.86, 0.68), opacity: 0.6 }));
     this.proj.rotation.x = -Math.PI / 2;
@@ -559,12 +615,13 @@ class TemporalProjector extends HTMLElement {
     this.floorRig.add(this.proj);
 
     this._buildHologram(scene);
-    this.lensGlow = sprite(0x6f8cff, 0.03, HOLO.lens);
+    this._buildMist();
+    this.lensGlow = sprite(0x6f8cff, 0.038, HOLO.lens);
 
     // animation state
     this.dialSpring = new Spring(DATES[this.state.index].angle, 240, 0.55);
     this.keySpring = new Spring(0, 900, 0.7);
-    this.powerSpring = new Spring(0, 900, 0.7);
+    this.powerSpring = new Spring(this.state.power ? POWER_SLIDE : 0, 520, 0.85);
     this.lightSpring = new Spring(this.state.power ? 1 : 0, 60, 1);
     this.projFade = new Spring(this.state.power ? 1 : 0, 80, 1);
     this.holoSpring = new Spring(this.state.power ? 1 : 0, 16, 1);
@@ -646,10 +703,40 @@ class TemporalProjector extends HTMLElement {
     Object.assign(key.shadow.camera, { left: -L.area, right: L.area, top: L.area, bottom: -L.area, near: 0.05, far: 2 });
     key.shadow.camera.updateProjectionMatrix();
     this.floor.material.opacity = L.opacity;
+    this._applyLook();
     this._placeDevice();
     this._buildRoom();
     this._footprint = null;
     if (this.renderer) this._resize();
+  }
+
+  // Rendering and materials, live: tone mapping, the reflected studio, the plastic shell and the aluminium dial.
+  _applyLook() {
+    const cfg = this.sceneCfg ?? TABLE_SCENE, L = { ...TABLE_SCENE.look, ...cfg.look },
+      S = { ...TABLE_SCENE.shell, ...cfg.shell }, D = { ...TABLE_SCENE.dial, ...cfg.dial }, r = this.renderer;
+    if (!r) return;
+    r.toneMapping = L.agx ? THREE.AgXToneMapping : THREE.NeutralToneMapping;
+    r.toneMappingExposure = L.exposure;
+    this.scene.environmentIntensity = L.env;
+    const envKey = L.room + '|' + L.flags;
+    if (envKey !== this._envKey) {
+      this._envKey = envKey;
+      const old = this.scene.environment;
+      this.scene.environment = studioEnvironment(r, this.table, { room: L.room, flags: L.flags });
+      old?.dispose();
+    }
+    this.deviceRoot?.traverse((o) => {
+      if (!o.isMesh) return;
+      const m = o.material, n = m.name;
+      if (n === 'body_warm_white' || n === 'trim_grey') {
+        Object.assign(m, { metalness: S.metalness, roughness: S.roughness, specularIntensity: S.specular,
+          clearcoat: S.clearcoat, clearcoatRoughness: S.coatRoughness, sheen: S.sheen });
+        if (n === 'body_warm_white') m.color.set(S.color);
+        if (m.aoMap) m.aoMapIntensity = S.ao;
+        m.needsUpdate = true;
+      }
+      if (n === 'alu_beadblast') m.roughness = D.roughness;
+    });
   }
 
   // The light stands where the camera's screen says "top left": measured from the viewer's own directions on the table.
@@ -833,8 +920,6 @@ class TemporalProjector extends HTMLElement {
   // ---------------------------------------------------------------- input
   _bindInput() {
     const ray = new THREE.Raycaster(), ndc = new THREE.Vector2();
-    const dialPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), -DIAL_C.y);
-    const hitPoint = new THREE.Vector3();
     const toNdc = (e) => {
       const r = this.canvas.getBoundingClientRect();
       ndc.set(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1);
@@ -847,11 +932,6 @@ class TemporalProjector extends HTMLElement {
       let o = hit.object;
       while (o && !this.interactive.includes(o)) o = o.parent;
       return o;
-    };
-    const pointerAngle = () => {
-      if (!ray.ray.intersectPlane(dialPlane, hitPoint)) return null;
-      this.rig.worldToLocal(hitPoint);
-      return THREE.MathUtils.radToDeg(Math.atan2(-(hitPoint.z - DIAL_C.z), hitPoint.x - DIAL_C.x));
     };
 
     let drag = null, pressed = null, move = null;
@@ -883,12 +963,11 @@ class TemporalProjector extends HTMLElement {
       this.controls.enabled = false;
       try { this.canvas.setPointerCapture(e.pointerId); } catch { /* not a live pointer */ }
       if (target === this.dial) {
-        drag = { a0: pointerAngle(), start: this.dialSpring.v, acc: 0, prev: null, x: e.clientX, y: e.clientY, moved: false };
-        drag.prev = drag.a0;
+        // roll the crown: drag up for later years, down for earlier
+        drag = { start: this.dialSpring.v, x: e.clientX, y: e.clientY, moved: false };
       } else {
         pressed = target;
         if (target === this.key) this.keySpring.t = -0.0011;
-        if (target === this.powerBtn) this.powerSpring.t = -0.0008;
         this.clicker.play(0.22, 2400);
       }
     }, { capture: true });
@@ -901,16 +980,8 @@ class TemporalProjector extends HTMLElement {
         return;
       }
       if (drag) {
-        toNdc(e);
-        const a = pointerAngle();
-        if (a == null || drag.a0 == null) return;
-        let d = a - drag.prev;
-        if (d > 180) d -= 360;
-        if (d < -180) d += 360;
-        drag.prev = a;
-        drag.acc += d;
         if (Math.hypot(e.clientX - drag.x, e.clientY - drag.y) > 4) drag.moved = true;
-        const v = THREE.MathUtils.clamp(drag.start + drag.acc, MIN_A, MAX_A);
+        const v = THREE.MathUtils.clamp(drag.start + (e.clientY - drag.y) * CROWN_DRAG, MIN_A, MAX_A);
         this.dialSpring.t = v;
         this.dialSpring.v = v;
         this.dialSpring.vel = 0;
@@ -934,7 +1005,6 @@ class TemporalProjector extends HTMLElement {
       }
       if (pressed) {
         this.keySpring.t = 0;
-        this.powerSpring.t = 0;
         this.clicker.play(0.16, 1800);
         if (pressed === this.key) this.randomFuture();
         if (pressed === this.powerBtn) this.togglePower();
@@ -944,6 +1014,18 @@ class TemporalProjector extends HTMLElement {
     };
     this.canvas.addEventListener('pointerup', end);
     this.canvas.addEventListener('pointercancel', end);
+
+    // scroll over the crown rolls it one year per notch (trackpads accumulate)
+    let wheelAcc = 0;
+    this.canvas.addEventListener('wheel', (e) => {
+      if (pick(e) !== this.dial) { wheelAcc = 0; return; }
+      e.preventDefault();
+      wheelAcc += e.deltaY;
+      if (Math.abs(wheelAcc) < 40) return;
+      const i = this.state.index, step = wheelAcc < 0 ? 1 : -1;   // scroll up = later
+      wheelAcc = 0;
+      this.setDate(DATES[THREE.MathUtils.clamp(i + step, 0, DATES.length - 1)].label);
+    }, { passive: false });
 
     this.addEventListener('keydown', (e) => {
       const i = this.state.index;
@@ -1027,6 +1109,7 @@ class TemporalProjector extends HTMLElement {
     if (on === this.state.power) return;
     this.state.power = on;
     this.lightSpring.t = on ? 1 : 0;
+    this.powerSpring.t = on ? POWER_SLIDE : 0;
     this.projFade.t = on ? 1 : 0;
     this.holoSpring.t = on ? 1 : 0;
     if (on) this._project(this._labelFor(this.state.index), 500);
@@ -1054,6 +1137,67 @@ class TemporalProjector extends HTMLElement {
     g.fillText(text, c.width / 2, c.height / 2 + 6);
     this.projTex.needsUpdate = true;
     this._holoText(text);
+  }
+
+  // ---------------------------------------------------------------- fog
+  // The image needs a medium: a faint fog breathes out of the perforation ring around the lens,
+  // drifts inward and up through the beam, and thins out above the picture.
+  _buildMist() {
+    const N = 320, pos = new Float32Array(N * 3), col = new Float32Array(N * 4);
+    this.mistP = Array.from({ length: N }, () => this._spawnMist({}, Math.random()));
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+    g.setAttribute('color', new THREE.BufferAttribute(col, 4));   // rgba: per-particle alpha
+    const c = document.createElement('canvas');
+    c.width = c.height = 64;
+    const x = c.getContext('2d'), grd = x.createRadialGradient(32, 32, 0, 32, 32, 32);
+    grd.addColorStop(0, 'rgba(255,255,255,1)');
+    grd.addColorStop(0.4, 'rgba(255,255,255,0.45)');
+    grd.addColorStop(1, 'rgba(255,255,255,0)');
+    x.fillStyle = grd;
+    x.fillRect(0, 0, 64, 64);
+    const tex = new THREE.CanvasTexture(c);
+    this.mist = new THREE.Points(g, new THREE.PointsMaterial({ size: 0.011, map: tex, vertexColors: true,
+      transparent: true, depthWrite: false, sizeAttenuation: true }));
+    this.mist.position.copy(HOLO.lens);
+    this.mist.frustumCulled = false;
+    this.mist.renderOrder = 2;
+    this.rig.add(this.mist);
+  }
+
+  _spawnMist(p, age = 0) {
+    const a = Math.random() * Math.PI * 2, r = 0.0206 + Math.random() * 0.0015;   // the fog perforations around the 18 mm lens
+    p.x = Math.cos(a) * r; p.z = Math.sin(a) * r; p.y = 0.0005;
+    p.life = 3.2 + Math.random() * 2.4;
+    p.t = age * p.life;
+    p.vy = 0.010 + Math.random() * 0.010;
+    p.swirl = (Math.random() - 0.5) * 0.6;
+    if (age) { const k = p.t; p.y += p.vy * k; p.x *= Math.max(0.15, 1 - k * 0.22); p.z *= Math.max(0.15, 1 - k * 0.22); }
+    return p;
+  }
+
+  _tickMist(dt) {
+    if (!this.mist) return;
+    const k = THREE.MathUtils.clamp(this.holoSpring.v, 0, 1);
+    this.mist.visible = k > 0.01;
+    if (!this.mist.visible) return;
+    const pos = this.mist.geometry.attributes.position.array, col = this.mist.geometry.attributes.color.array;
+    const top = HOLO.top + 0.01, step = reduceMotion ? 0 : dt;
+    this.mistP.forEach((p, i) => {
+      p.t += step;
+      if (p.t > p.life) this._spawnMist(p);
+      const r = Math.hypot(p.x, p.z), pull = 0.22 * step * (r > 0.004 ? 1 : 0);   // drawn in toward the beam
+      const ca = Math.cos(p.swirl * step), sa = Math.sin(p.swirl * step);
+      const nx = p.x * ca - p.z * sa, nz = p.x * sa + p.z * ca;
+      p.x = nx * (1 - pull); p.z = nz * (1 - pull);
+      p.y += p.vy * step;
+      const u = p.t / p.life, h = p.y / top;
+      const a = Math.sin(Math.PI * Math.min(1, u)) * (1 - THREE.MathUtils.smoothstep(h, 0.6, 1)) * 0.10 * k;
+      pos[i * 3] = p.x; pos[i * 3 + 1] = p.y; pos[i * 3 + 2] = p.z;
+      col[i * 4] = 0.93; col[i * 4 + 1] = 0.95; col[i * 4 + 2] = 1; col[i * 4 + 3] = a;
+    });
+    this.mist.geometry.attributes.position.needsUpdate = true;
+    this.mist.geometry.attributes.color.needsUpdate = true;
   }
 
   // ---------------------------------------------------------------- hologram
@@ -1250,15 +1394,16 @@ class TemporalProjector extends HTMLElement {
   }
 
   // ---------------------------------------------------------------- frame
-  _applyDial(angle) { this.dial.rotation.y = THREE.MathUtils.degToRad(angle - BAKED_POINTER); }
+  _applyDial(angle) { this.dial.rotation.x = THREE.MathUtils.degToRad(angle * CROWN_ROLL); }
 
   _applyLights(k) {
     const pulse = this.pulse || 0;
     this.M.led_green.emissiveIntensity = 6 * k;
     this.M.projector_core.emissiveIntensity = 1.2 * k * (1 + pulse * 5);
-    this.M.front_core.emissiveIntensity = 5 * k;
-    this.ledGlow.material.opacity = 0.9 * k;
-    this.frontGlow.material.opacity = 0.75 * k;
+    this.M.front_core.emissiveIntensity = 2.4 * k;
+    this.M.power_on.emissiveIntensity = 3 * k;
+    this.ledGlow.material.opacity = 0.5 * k;
+    this.frontGlow.material.opacity = 0.1 * k;
   }
 
   _tick() {
@@ -1273,15 +1418,16 @@ class TemporalProjector extends HTMLElement {
     this.keySpring.step(dt);
     this.key.position.y = this.keyY + this.keySpring.v;
     this.powerSpring.step(dt);
-    this.powerBtn.position.y = this.powerY + this.powerSpring.v;
+    this.powerBtn.position.x = this.powerX + this.powerSpring.v;
     this.lightSpring.step(dt);
     this.projFade.step(dt);
     if (this.pulse) this.pulse = Math.max(0, this.pulse - dt * 1.2);
     this._applyLights(this.lightSpring.v);
     const flicker = this.state.power ? 1 - 0.025 * Math.random() : 1;
-    this.proj.material.opacity = 0.48 * this.projFade.v * flicker;
+    this.proj.material.opacity = 0.42 * this.projFade.v * flicker;
     if (!this.table) this.controls.update();
     this._tickHologram(dt, performance.now());
+    this._tickMist(dt);
     if (this.table) this._tickRig(dt);
     for (const f of this.tickers) { try { f(dt); } catch (e) { console.error(e); } }
     this.renderer.render(this.scene, this.camera);
