@@ -855,7 +855,8 @@ class TemporalProjector extends HTMLElement {
     };
 
     let drag = null, pressed = null, move = null;
-    // Table view with the `movable` attribute: the projector's body (not its controls) can be picked up and slid across the table.
+    // Table view with the `movable` attribute: the projector's body (not its controls) can be picked up a little and let drop.
+    // It stays where it stands; only the scene config (the lab) places it.
     const movable = () => this.table && this.hasAttribute('movable');
     const hitsBody = (e) => { toNdc(e); return ray.intersectObject(this.deviceRoot, true).length > 0; };
     const holdHit = (e, through) => {
@@ -894,14 +895,9 @@ class TemporalProjector extends HTMLElement {
 
     this.canvas.addEventListener('pointermove', (e) => {
       if (move) {
-        // Like the paper: an upright plane through it, square to where you look. Up lifts it; below the table, it slides on the table.
+        // It only comes up a little, straight up where it stands: moving up raises it toward MAX_LIFT, never sideways.
         const H = this._hold, hit = holdHit(e, H.anchor); if (!hit) return;
-        const tgt = hit.add(H.off), lift = 0.012;
-        // below the table line it slides on the table instead: the hand point at the height that puts the projector at `lift`,
-        // so the switch is seamless
-        if (tgt.y < lift) { const f = this.floorRay(e.clientX, e.clientY, lift - H.off.y); if (f) { tgt.copy(f).add(H.off); H.anchor.copy(tgt); } tgt.y = lift; }
-        this._clampRig(tgt);
-        H.target = tgt;
+        H.target = H.anchor.clone().setY(THREE.MathUtils.clamp(hit.y + H.off.y, 0.012, 0.04));
         return;
       }
       if (drag) {
@@ -927,8 +923,8 @@ class TemporalProjector extends HTMLElement {
       if (move) {
         // let go: it keeps a little of the hand's motion (it is heavy) and falls
         const H = this._hold, now = performance.now(), h = H.hist.filter(([, t]) => now - t < 110);
-        const v = h.length > 1 ? h[h.length - 1][0].clone().sub(h[0][0]).divideScalar(Math.max(0.016, (h[h.length - 1][1] - h[0][1]) / 1000)) : new THREE.Vector3();
-        this._fall = v.multiplyScalar(0.5); this._hold = null; move = null;
+        const vy = h.length > 1 ? (h[h.length - 1][0].y - h[0][0].y) / Math.max(0.016, (h[h.length - 1][1] - h[0][1]) / 1000) : 0;
+        this._fall = new THREE.Vector3(0, Math.max(0, vy) * 0.3, 0); this._hold = null; move = null;   // straight back down where it stood
         this.canvas.style.cursor = 'grab';
       }
       if (drag) {

@@ -105,7 +105,7 @@ for (const [title, rows] of CONTROLS) {
     }
   }
 }
-body.insertAdjacentHTML('beforeend', `<p class="note">Visitors can drag the projector too; this sets where it starts.</p>
+body.insertAdjacentHTML('beforeend', `<p class="note">Visitors can only lift it a little; this is where it stands.</p>
   <h3>Overlays</h3>
   <label class="check"><input type="checkbox" data-ov="grid" checked> Table grid (5 cm)</label>
   <label class="check"><input type="checkbox" data-ov="room" checked> Room box</label>
