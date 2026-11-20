@@ -17,6 +17,7 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { SCENES, HOLO_DOTS, MAX_BONES } from './holo-scenes.js?v=13';   // versioned: a cached copy must never outlive a change
 
 const DATES = [
   { label: '1996', angle: 210 },
@@ -34,16 +35,16 @@ const TOP_Y = 0.021;                // top surface height (m)
 const POWER_SLIDE = 0.0088;         // the power knob slides this far right when on
 const LED_P = new THREE.Vector3(0.0255, TOP_Y - 0.0023, -0.014);    // green strip the knob uncovers
 const APERTURE_P = new THREE.Vector3(0.0, 0.011, 0.0312);           // front projection lens, centred
-const PROJ_P = new THREE.Vector3(0.0, 0.0002, 0.066);               // where it throws the year on the table
+const PROJ_P = new THREE.Vector3(0.0, 0.0002, 0.082);               // where it throws the year and its line on the table
 const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
 
 // The hologram rises from the top lens: a cone of light, and a dithered image floating inside it.
 const HOLO = {
   lens: new THREE.Vector3(-0.024, TOP_Y + 0.0006, -0.0025),
-  r0: 0.0096,          // beam radius at the lens
-  r1: 0.036,           // beam radius at the top of the image
-  gap: 0.016,          // lens to the bottom of the image
-  w: 0.056, h: 0.074,  // image plane
+  r0: 0.012,           // beam radius at the lens
+  r1: 0.08,            // beam radius at the top of the image
+  gap: 0.026,          // lens to the bottom of the image: the subject floats clear of the projector
+  w: 0.145, h: 0.15,   // image plane: the subjects stand well over the projector's length tall
 };
 HOLO.top = HOLO.gap + HOLO.h;
 // table view: what the camera looks at, and the radius that --stage-scale sizes
@@ -186,6 +187,91 @@ const HOLO_MOTES_FS = `
     float d = length(gl_PointCoord - .5);
     if (d > .5) discard;
     gl_FragColor = vec4(uCol, vA * uAlpha * (1. - d * 2.) * .8);
+  }`;
+
+// The hologram's subjects as clouds of soft dots (see holo-scenes.js). Two slots, A and B: changing the date flies every
+// dot from its place in A to its place in B along a little arc toward you, each dot a beat after the last. Bones animate
+// rigid parts, the wind moves what has sway, and the dots breathe along their normals. Shading follows the point-cloud
+// portraits this is modelled on: an even, scan-like tone, a soft key from the top left, a rim, ridges catching light,
+// creases falling into shadow, loose strands glowing. On a light page the "light" is ink: brighter dots are denser blue.
+const HOLO_CLOUD_VS = `
+  attribute vec3 aPosA, aPosB, aNrmA, aNrmB;
+  attribute vec4 aSkinA, aSkinB;   // bone, bone, weight of the first, sway (+ wind, − a mote drifting up)
+  attribute vec4 aMatA, aMatB;     // brightness, orange accent, ridge, thin
+  attribute float aRand;
+  uniform mat4 uBonesA[${MAX_BONES}], uBonesB[${MAX_BONES}];
+  uniform float uFadeA[${MAX_BONES}], uFadeB[${MAX_BONES}];
+  uniform float uMorph, uTime, uReveal, uSize, uGlitch, uShine, uWind, uCenterZ, uDepth, uLit, uLensY;
+  uniform vec3 uInk, uSignal, uPale;
+  varying vec3 vCol;
+  varying float vA;
+  float hash(vec2 p){ p = fract(p * vec2(.1031, .1030)); p += dot(p, p.yx + 33.33); return fract((p.x + p.y) * p.x); }
+  vec3 rest(vec3 p, float sw, out float fade){
+    fade = 1.;
+    if (sw < 0.) {                                                     // a mote: drifts up, sways, fades in and out
+      float ph = fract(uTime * -sw * .07 + aRand * 13.);
+      fade = sin(3.14159 * ph);
+      return p + vec3(sin(uTime * .7 + aRand * 40.) * .03 * ph, ph * .34 * uWind, cos(uTime * .6 + aRand * 31.) * .03 * ph);
+    }
+    return p + vec3(sin(uTime * 1.7 + p.y * 11. + p.z * 6.) * .010 + sin(uTime * .9 + p.x * 4.) * .007, 0.,
+                    cos(uTime * 1.3 + p.y * 9. + p.x * 5.) * .008) * sw * uWind;
+  }
+  void main(){
+    float r2 = fract(sin(aRand * 91.7) * 43758.5453);
+    int a0 = int(aSkinA.x + .5), a1 = int(aSkinA.y + .5), b0 = int(aSkinB.x + .5), b1 = int(aSkinB.y + .5);
+    mat4 MA = uBonesA[a0] * aSkinA.z + uBonesA[a1] * (1. - aSkinA.z);   // linear blend skinning
+    mat4 MB = uBonesB[b0] * aSkinB.z + uBonesB[b1] * (1. - aSkinB.z);
+    float fA, fB;
+    vec3 pA = (MA * vec4(rest(aPosA, aSkinA.w, fA), 1.)).xyz, pB = (MB * vec4(rest(aPosB, aSkinB.w, fB), 1.)).xyz;
+    fA *= mix(uFadeA[a1], uFadeA[a0], aSkinA.z); fB *= mix(uFadeB[b1], uFadeB[b0], aSkinB.z);
+    vec3 nA = mat3(MA) * aNrmA, nB = mat3(MB) * aNrmB;
+    // a switch: every dot pours back down into the lens, then shoots up into its place in the next subject, spiralling
+    vec3 L = vec3(0., uLensY, 0.), jit = (fract(vec3(aRand * 91.7, aRand * 47.3, aRand * 13.1) * 43.7) - .5) * vec3(.07, .02, .07);
+    float dir = r2 > .5 ? 1. : -1., t = clamp((uMorph - aRand * .35) / .65, 0., 1.), fly, k;
+    vec3 p, n; vec4 m; float fade;
+    if (t < .5) { k = t * 2.; k = k * k * k; p = mix(pA, L + jit, k); n = nA; m = aMatA; fade = fA; fly = k; }
+    else { k = (t - .5) * 2.; k = 1. - pow(1. - k, 3.); p = mix(L + jit, pB, k); n = nB; m = aMatB; fade = fB; fly = 1. - k; }
+    float sa = fly * 2.2 * dir, cs = cos(sa), sn = sin(sa); vec3 d = p - L; p = L + vec3(cs * d.x + sn * d.z, d.y, -sn * d.x + cs * d.z);
+    n = normalize(n + vec3(0., 0., 1e-4));
+    // the projector keeps feeding it: one dot in twelve is always on its way up out of the lens to its place
+    if (aRand < .085 && uMorph == 0.) {
+      float f = fract(uTime * (.16 + r2 * .12) + aRand * 53.), g = smoothstep(0., .9, f);
+      p = mix(L + jit * .4, p, g); fly = max(fly, 1. - g);
+      fade *= smoothstep(0., .08, f);
+    }
+    p += n * sin(uTime * 1.4 + aRand * 60.) * .002;                  // breathing
+    float rv = clamp((uReveal * 1.35 - p.y * .85 - aRand * .3) / .3, 0., 1.);   // out of the lens, lowest first
+    rv = rv * rv * (3. - 2. * rv);
+    p = mix(vec3(p.x * .08, -.12, p.z * .08), p, rv);
+    float band = floor(p.y * 40.), tg = floor(uTime * 16.);
+    p.x += (hash(vec2(band, tg)) - .5) * .08 * uGlitch * step(.7, hash(vec2(band * 1.7, tg + 3.)));
+    vec4 mv = modelViewMatrix * vec4(p, 1.);
+    gl_Position = projectionMatrix * mv;
+    vec3 vn = normalize(normalMatrix * n);
+    float key = max(dot(vn, normalize(vec3(-.45, .65, .6))), 0.), facing = vn.z, rim = pow(1. - abs(facing), 2.5);
+    float lit = (.36 + key * .6 + rim * .32) * mix(.42, 1., smoothstep(-.35, .2, facing));   // the far side falls away
+    lit *= m.z > 0. ? 1. + m.z * .6 : 1. + m.z * .5;                  // ridges catch light, creases sink
+    float b = m.x * mix(1., lit, uLit) + m.w * (.18 + key * .2) * uLit;   // uLit: how much of the light is ours (art brings its own)
+    b = mix(b, 1.1, fly * .6);                                         // in flight they glow like the beam
+    b *= clamp(.8 + (mv.z - uCenterZ) / uDepth * .5, .4, 1.2);        // nearer is crisper: depth reads on a light page
+    b *= .88 + .12 * sin(p.y * 260. - uTime * 3.);                     // scanlines
+    float shine = exp(-pow(p.y - uShine, 2.) * 70.);
+    b += shine * .6;
+    b *= .75 + r2 * .45;
+    vA = clamp(b, 0., 1.15) * rv * fade;
+    vec3 ink = mix(uPale, uInk, clamp(b * .8, 0., 1.));
+    vCol = mix(mix(ink, uSignal, clamp(m.y, 0., 1.)), uPale, fly * .5);
+    gl_PointSize = uSize * (.55 + r2 * r2 * 1.) * (1. + shine * .4) / -mv.z;
+  }`;
+const HOLO_CLOUD_FS = `
+  uniform float uAlpha;
+  varying vec3 vCol;
+  varying float vA;
+  void main(){
+    vec2 d = gl_PointCoord - .5;
+    float r = dot(d, d);
+    if (r > .25) discard;
+    gl_FragColor = vec4(vCol, clamp(exp(-14. * r) * vA * 1.1 * uAlpha, 0., .92));
   }`;
 
 // Levels for an image, so a dark photo doesn't dither into a solid block: stretch the 2nd to 98th percentile,
@@ -419,7 +505,7 @@ class TemporalProjector extends HTMLElement {
       dates: Object.fromEntries(Object.entries(dates).map(([k, v]) => [k.toUpperCase(), { ...v }])),
       futures: futures.map((f) => ({ ...f, year: String(f.year) })),
     };
-    const all = [...Object.values(this._content.dates), ...this._content.futures].filter((e) => e.image);
+    const all = [...Object.values(this._content.dates), ...this._content.futures].filter((e) => e.image && !e.scene);   // subjects build their own dots
     if (this.state.index === 4 && this._content.futures.length && this.futureIndex == null) this._pickFuture();
     this._holoRefresh();
     return Promise.allSettled(all.map(prep));
@@ -603,13 +689,13 @@ class TemporalProjector extends HTMLElement {
     // the year, thrown onto the table by the front lens
     this.projCanvas = document.createElement('canvas');
     this.projCanvas.width = 1024;
-    this.projCanvas.height = 384;
+    this.projCanvas.height = 560;
     this.projTex = new THREE.CanvasTexture(this.projCanvas);
     this.projTex.colorSpace = THREE.SRGBColorSpace;
     this.projTex.anisotropy = 8;
-    this.proj = new THREE.Mesh(new THREE.PlaneGeometry(0.050, 0.01875),
-      new THREE.MeshBasicMaterial({ map: this.projTex, transparent: true, depthWrite: false,
-        blending: THREE.AdditiveBlending, color: new THREE.Color(1.0, 0.86, 0.68), opacity: 0.6 }));
+    this.proj = new THREE.Mesh(new THREE.PlaneGeometry(0.1, 0.1 * 560 / 1024),   // the year, and the line under it, cast on the floor in the beam's blue
+      new THREE.MeshBasicMaterial({ map: this.projTex, transparent: true, depthWrite: false, toneMapped: false,
+        color: new THREE.Color(0.06, 0.1, 0.8), opacity: 1 }));
     this.proj.rotation.x = -Math.PI / 2;
     this.proj.position.copy(PROJ_P);
     this.floorRig.add(this.proj);
@@ -1119,22 +1205,27 @@ class TemporalProjector extends HTMLElement {
 
   // ---------------------------------------------------------------- projection
   _drawProjection(text, jitter = 0) {
-    const c = this.projCanvas, g = c.getContext('2d');
+    const c = this.projCanvas, g = c.getContext('2d'), label = this.state.label || '';
     g.clearRect(0, 0, c.width, c.height);
     if (!text) { this.projTex.needsUpdate = true; return; }
-    const word = /\D/.test(text);
-    g.font = `${word ? 400 : 300} ${word ? 150 : 250}px "Helvetica Neue", Helvetica, Arial, sans-serif`;
-    if ('letterSpacing' in g) g.letterSpacing = word ? '18px' : '6px';
-    g.textAlign = 'center';
-    g.textBaseline = 'middle';
-    g.shadowColor = 'rgba(255,226,190,0.85)';
-    g.shadowBlur = 22;
-    g.fillStyle = '#fff';
-    g.globalAlpha = 1 - jitter * 0.5;
-    g.fillText(text, c.width / 2 + (Math.random() - 0.5) * 14 * jitter, c.height / 2 + 6);
-    g.shadowBlur = 0;
-    g.globalAlpha = 0.85 - jitter * 0.4;
-    g.fillText(text, c.width / 2, c.height / 2 + 6);
+    const W = c.width, x0 = W / 2 + (Math.random() - 0.5) * 14 * jitter, font = '"Helvetica Neue", Helvetica, Arial, sans-serif';
+    g.textAlign = 'center'; g.textBaseline = 'alphabetic'; g.fillStyle = '#fff'; g.globalAlpha = 1 - jitter * 0.5;
+    // the description, wrapped to at most three lines under the year
+    g.font = `400 56px ${font}`;
+    if ('letterSpacing' in g) g.letterSpacing = '0px';
+    const lines = [];
+    for (const word of label.split(/\s+/).filter(Boolean)) {
+      const last = lines[lines.length - 1];
+      if (last && g.measureText(last + ' ' + word).width < W * 0.9) lines[lines.length - 1] = last + ' ' + word; else lines.push(word);
+    }
+    lines.length = Math.min(lines.length, 3);
+    const yearH = 200, lineH = 70, total = yearH + lines.length * lineH, top = (c.height - total) / 2;
+    g.font = `400 ${yearH}px ${font}`;
+    if ('letterSpacing' in g) g.letterSpacing = '6px';
+    g.fillText(text, x0, top + yearH * 0.82);
+    g.font = `500 56px ${font}`;
+    if ('letterSpacing' in g) g.letterSpacing = '0px';
+    lines.forEach((l, i) => g.fillText(l, x0, top + yearH + 18 + (i + 0.75) * lineH));
     this.projTex.needsUpdate = true;
     this._holoText(text);
   }
@@ -1240,7 +1331,7 @@ class TemporalProjector extends HTMLElement {
     beam.renderOrder = 2;
     group.add(beam);
 
-    const N = 90, seeds = new Float32Array(N * 3);
+    const N = 1400, seeds = new Float32Array(N * 3);   // the stream of light rising out of the lens
     for (let i = 0; i < N; i++) seeds.set([Math.random() * Math.PI * 2, Math.sqrt(Math.random()) * 0.9, Math.random()], i * 3);
     const mg = new THREE.BufferGeometry();
     mg.setAttribute('position', new THREE.BufferAttribute(new Float32Array(N * 3), 3));
@@ -1251,6 +1342,26 @@ class TemporalProjector extends HTMLElement {
     motes.frustumCulled = false;
     motes.renderOrder = 4;
     group.add(motes);
+
+    // the subjects: one pool of dots that every subject is made of
+    const cg = new THREE.BufferGeometry(), ND = HOLO_DOTS, rnd = new Float32Array(ND);
+    for (let i = 0; i < ND; i++) rnd[i] = Math.random();
+    for (const [name, size] of [['aPosA', 3], ['aPosB', 3], ['aNrmA', 3], ['aNrmB', 3], ['aSkinA', 4], ['aSkinB', 4], ['aMatA', 4], ['aMatB', 4]])
+      cg.setAttribute(name, new THREE.BufferAttribute(new Float32Array(ND * size), size));
+    cg.setAttribute('aRand', new THREE.BufferAttribute(rnd, 1));
+    cg.setAttribute('position', cg.attributes.aPosA);
+    const bones = () => Array.from({ length: MAX_BONES }, () => new THREE.Matrix4());
+    const cloud = new THREE.Points(cg, new THREE.ShaderMaterial({ ...blend, vertexShader: HOLO_CLOUD_VS, fragmentShader: HOLO_CLOUD_FS,
+      uniforms: { uBonesA: U(bones()), uBonesB: U(bones()), uFadeA: U(new Array(MAX_BONES).fill(1)), uFadeB: U(new Array(MAX_BONES).fill(1)), uCenterZ: U(-1), uDepth: U(HOLO.h * 0.5), uLit: U(1), uLensY: U(-HOLO.gap / HOLO.h), uPale: U(new THREE.Vector3(0.55, 0.64, 1)), uMorph: U(0), uTime: U(0), uReveal: U(0), uSize: U(1), uGlitch: U(0),
+        uShine: U(99), uWind: U(reduceMotion ? 0 : 1), uAlpha: U(0), uInk: U(HOLO_INK), uSignal: U(HOLO_SIGNAL), uGlow: U(new THREE.Vector3(0.45, 0.6, 1)) } }));
+    cloud.frustumCulled = false;
+    cloud.renderOrder = 3;
+    cloud.scale.setScalar(HOLO.h);
+    cloud.position.y = HOLO.gap;
+    cloud.rotation.order = 'YXZ';
+    cloud.visible = false;
+    group.add(cloud);
+    this.cloud = { pts: cloud, A: null, B: null, start: 0, on: 0, want: null, cache: new Map() };
 
     this.holo = { group, image, beam, motes, blank, a: this._textSlot, b: null, mixStart: 0 };
     this._setSlot('A', this._textSlot, false);
@@ -1276,7 +1387,10 @@ class TemporalProjector extends HTMLElement {
   // Point the hologram at the current date: cross-dissolve to its picture, or to the year.
   _holoRefresh() {
     if (!this.holo) return;
-    const e = this._entry(), next = e?.ready ? e : this._textSlot, future = this.state.index === 4, h = this.holo;
+    const se = this._entry();
+    this.cloud.want = se?.scene && SCENES[se.scene] ? se.scene : null;
+    if (this.cloud.want) this._showScene(se);
+    const e = se, next = e?.ready ? e : this._textSlot, future = this.state.index === 4, h = this.holo;
     const shown = h.b || h.a;
     if (shown === next && (h.b ? h.futureB : h.futureA) === future) return;
     if (h.b) { this._setSlot('A', h.b, h.futureB); h.futureA = h.futureB; h.b = null; }
@@ -1286,6 +1400,54 @@ class TemporalProjector extends HTMLElement {
     h.mixStart = performance.now();
     h.image.material.uniforms.uMix.value = 0;
     this.glitch = Math.max(this.glitch, 0.5);
+  }
+
+  // A subject's dots, built once (in code) and cached. Building is quick, except the face, which waits for its photo.
+  _sceneData(entry) {
+    const c = this.cloud, key = entry.scene;
+    if (c.cache.has(key)) return c.cache.get(key);
+    // built in a worker (off the main thread); where workers can't, at idle time here
+    const local = () => new Promise((ok) => (window.requestIdleCallback ? requestIdleCallback : (f) => setTimeout(f, 50))(() => ok(SCENES[key].build(entry))));
+    let p;
+    try {
+      if (!this._worker) {
+        this._worker = new Worker(new URL('./holo-worker.js?v=13', import.meta.url), { type: 'module' });
+        this._jobs = new Map();
+        this._worker.onmessage = ({ data }) => { const j = this._jobs.get(data.key); if (!j) return; this._jobs.delete(data.key); data.error ? j.fail(new Error(data.error)) : j.ok(data.d); };
+        this._worker.onerror = () => { for (const j of this._jobs.values()) j.fail(new Error('worker failed')); this._jobs.clear(); this._worker = null; this._noWorker = true; };
+      }
+      if (this._noWorker) throw new Error('no worker');
+      p = new Promise((ok, fail) => { this._jobs.set(key, { ok, fail }); this._worker.postMessage({ key, entry: { scene: entry.scene, image: entry.image, mask: entry.mask } }); })
+        .catch(() => local());
+    } catch { p = local(); }
+    p = p.catch((err) => { console.error(err); c.cache.delete(key); return null; });
+    c.cache.set(key, p);
+    return p;
+  }
+
+  _showScene(entry) {
+    const key = entry.scene;
+    this._sceneData(entry).then((data) => {
+      const c = this.cloud;
+      if (!data || c.want !== key) return;
+      const g = c.pts.geometry.attributes, put = (slot, d) => { g['aPos' + slot].array.set(d.pos); g['aNrm' + slot].array.set(d.nrm); g['aSkin' + slot].array.set(d.skin); g['aMat' + slot].array.set(d.mat);
+        for (const n of ['aPos', 'aNrm', 'aSkin', 'aMat']) g[n + slot].needsUpdate = true; };
+      if (!c.A) { put('A', data); c.A = key; c.dataA = data; return; }   // (each subject's fit rides along in data.fit)
+      if ((c.B || c.A) === key) return;
+      if (c.B) { put('A', c.dataB); c.A = c.B; c.dataA = c.dataB; }      // a new date mid-flight: land the last one at once
+      put('B', data); c.B = key; c.dataB = data; c.start = performance.now();
+      this._prebuildScenes();
+    });
+  }
+
+  // after the first subject, build the rest when the page is idle, so changing the date never stalls
+  _prebuildScenes() {
+    if (this._prebuilt) return;
+    this._prebuilt = true;
+    const all = [...Object.values(this._content.dates), ...this._content.futures].filter((e) => e.scene && SCENES[e.scene]);
+    const idle = (f) => (window.requestIdleCallback ? requestIdleCallback(f, { timeout: 3000 }) : setTimeout(f, 200));
+    const next = () => { const e = all.shift(); if (!e) return; this._sceneData(e).then(() => idle(next)); };
+    idle(next);
   }
 
   _holoText(text) {
@@ -1341,15 +1503,52 @@ class TemporalProjector extends HTMLElement {
     u.uCell.value = THREE.MathUtils.clamp(imgPx / 95, 1.5, 2.8) * this.renderer.getPixelRatio();
     bu.uGrow.value = grow;
     bu.uTime.value = t;
-    bu.uAlpha.value = Math.min(1, k * 3) * flicker;
+    bu.uAlpha.value = Math.min(1, k * 3) * flicker * 0.55;   // the beam stays quiet behind the subject
     bu.uPulse.value = pulse;
     bu.uCol.value.lerpVectors(HOLO_INK, HOLO_SIGNAL, future * 0.85);
     mu.uTime.value = t;
     mu.uGrow.value = grow;
     mu.uAlpha.value = Math.min(1, k * 2);
-    mu.uSize.value = 2.6 * this.renderer.getPixelRatio();
+    mu.uSize.value = 2.2 * this.renderer.getPixelRatio();
     mu.uCol.value.copy(bu.uCol.value);
     h.group.visible = k > 0.001;
+
+    // the subject's dots
+    const c = this.cloud, cu = c.pts.material.uniforms;
+    c.on += ((c.want && c.A ? 1 : 0) - c.on) * (1 - Math.exp(-dt * 6));
+    if (c.B) {
+      const m = Math.min(1, (now - c.start) / (reduceMotion ? 1 : 1500));
+      cu.uMorph.value = m;
+      if (m >= 1) {
+        const g = c.pts.geometry.attributes;
+        for (const n of ['aPos', 'aNrm', 'aSkin', 'aMat']) { g[n + 'A'].array.set(g[n + 'B'].array); g[n + 'A'].needsUpdate = true; }
+        c.A = c.B; c.dataA = c.dataB; c.B = null; cu.uMorph.value = 0;
+      }
+    }
+    if (c.A) {
+      cu.uFadeA.value.fill(1); cu.uFadeB.value.fill(1);
+      const fit = (bones, d) => { const f = d?.fit; if (!f) return; const M = new THREE.Matrix4().makeTranslation(f[1], f[2], f[3]).multiply(new THREE.Matrix4().makeScale(f[0], f[0], f[0])); for (const b of bones) b.premultiply(M); };
+      SCENES[c.A].anim(t, cu.uBonesA.value, cu.uFadeA.value); fit(cu.uBonesA.value, c.dataA);
+      if (c.B) { SCENES[c.B].anim(t, cu.uBonesB.value, cu.uFadeB.value); fit(cu.uBonesB.value, c.dataB); }
+      else { cu.uBonesB.value.forEach((b, i) => b.copy(cu.uBonesA.value[i])); cu.uFadeB.value.set ? cu.uFadeB.value.set(cu.uFadeA.value) : cu.uFadeA.value.forEach((v, i) => (cu.uFadeB.value[i] = v)); }
+    }
+    c.pts.visible = c.on > 0.003 && !!c.A;
+    // it turns to you around its vertical axis, and leans a little toward your eye (more for faces)
+    const eye = h.group.worldToLocal(this.camera.position.clone()), lean = (SCENES[c.B || c.A]?.lean ?? 0.2);
+    c.pts.rotation.y = Math.atan2(eye.x, eye.z);
+    c.pts.rotation.x = -Math.atan2(eye.y - (HOLO.gap + HOLO.h / 2), Math.hypot(eye.x, eye.z)) * lean;
+    const dist = this.camera.position.distanceTo(c.pts.getWorldPosition(new THREE.Vector3()));
+    cu.uSize.value = THREE.MathUtils.clamp(imgPx / 210, 0.9, 2.4) * this.renderer.getPixelRatio() * dist;
+    const cz = c.pts.localToWorld(new THREE.Vector3(0, 0.5, 0)).applyMatrix4(this.camera.matrixWorldInverse).z;
+    cu.uLit.value = SCENES[c.B || c.A]?.lit ?? 1;
+    cu.uCenterZ.value = cz; cu.uDepth.value = HOLO.h * 0.45;
+    cu.uTime.value = t;
+    cu.uReveal.value = reveal;
+    cu.uGlitch.value = reduceMotion ? 0 : this.glitch;
+    const sp = (t % 7) / 1.8;                                            // a band of light sweeps up the subject every 7 s
+    cu.uShine.value = reduceMotion || sp > 1 ? 99 : -0.15 + sp * 1.3;
+    cu.uAlpha.value = Math.min(1, k * 2.5) * flicker * c.on;
+    u.uAlpha.value *= 1 - c.on;                                          // the flat picture (or the year) gives way to the dots
     this.lensGlow.material.opacity = 0.85 * grow * (1 + pulse);
 
     // caption above the image, in page type
@@ -1362,7 +1561,7 @@ class TemporalProjector extends HTMLElement {
     cap.classList.toggle('future', !!future);
     const p = this.rig.localToWorld(HOLO.lens.clone().add(new THREE.Vector3(0, HOLO.top + 0.004, 0))).project(this.camera);
     cap.style.transform = `translate(${((p.x + 1) / 2 * this.clientWidth).toFixed(1)}px, ${((1 - p.y) / 2 * this.clientHeight).toFixed(1)}px)`;
-    cap.style.opacity = label ? String(reveal * reveal * flicker) : '0';
+    cap.style.opacity = '0';                                            // the year and its line are cast on the floor instead
   }
 
   _project(text, ms) {
