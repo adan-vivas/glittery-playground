@@ -6,7 +6,7 @@ jumps to the future and projects a plausible one. A small front lens projects th
 selected date onto the table, and the lens on top projects a hologram into the air:
 a cone of light with a dithered image floating inside it. Power on and it rises out
 of the lens; turn the dial or press the key and it dissolves to the next picture.
-Without pictures it shows the year. The homepage (`../index.html`) gives it a portrait per era.
+Without pictures it shows the year. `../projector.html` gives it a portrait per era.
 
 ![Hero render](renders/zeitlinse_hero.jpg)
 
