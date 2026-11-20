@@ -406,6 +406,7 @@ import * as THREE from 'three';
     DL[i] = Math.min(1, Math.hypot(u - .5, (v - .5) * 1.2) / .62);           // the middle flattens first, the corners last
     DLTL[i] = 1 - Math.min(1, Math.hypot(u, v * 1.35) / 1.45); DLTR[i] = 1 - Math.min(1, Math.hypot(1 - u, v * 1.35) / 1.45);
   }
+  const DLC = DL.map((d) => 1 - d);   // crumpling: the middle of the page balls up first, the edges stay open longest
   const IDX = new Uint16Array(GX * GY * 6);
   for (let j = 0, n = 0; j < GY; j++) for (let k = 0; k < GX; k++) { const a = j * (GX + 1) + k, b = a + 1, c = a + GX + 1, d = c + 1; IDX.set([a, c, b, b, c, d], n); n += 6; }
 
@@ -491,7 +492,7 @@ import * as THREE from 'three';
   const sheet = { w: 290, h: 440 };                                   // the DOM letter, in px
   // B: the ball. p is its centre (metres), v its velocity, lift how far a hand holds it above where physics put it.
   const B = { p: V3(), v: V3(), q: qrand(), w: V3(), ph: 0, sq: 0, sqv: 0, n: V3(0, 1, 0), lift: 0, lv: 0, sx: -999, sy: -999, rpx: 20 };
-  const SP = { t: 0, tv: 0, c: 1, cv: 0, h: 0, hv: 0, q: QI, spin: 0 };   // t: travel to the held place; c: how crumpled (1 = ball); h: height of the centre
+  const SP = { t: 0, tv: 0, c: 1, cv: 0, h: 0, hv: 0, q: QI, spin: 0, hang: 0 };   // t: travel to the held place; c: how crumpled (1 = ball); h: height of the centre
   let pmode = 'ball', hov = false, grab = null, from = V3(), qFrom = QI, L = { x: 0, y: 0 }, held = V3(), placed = false, paperOn = false;
   let ov, oscene, occRig, sun, hemi, roomLight, paperMesh, shadowTwin, geo, contact;
   const R = V3(), D = V3(), N = V3();                                  // the camera's right, down and toward-you: the held sheet's axes
@@ -684,10 +685,10 @@ import * as THREE from 'three';
   function close(corner) {
     if (pmode === 'opening') { pmode = 'open'; letter.classList.add('show'); }
     if (pmode !== 'open') return;
-    closeDL = corner === 'tl' ? DLTL : corner === 'tr' ? DLTR : DL;
+    closeDL = DLC;                                                        // always gathered into the middle of the page, whichever corner you grabbed
     if (letter.contains(document.activeElement)) refocus = true;           // focus goes back to the ball once it lands
     pmode = 'closing'; letter.classList.remove('show', 'peel'); letter.inert = true; document.documentElement.classList.remove('letter-open'); ballBtn.setAttribute('aria-expanded', 'false');
-    qFrom = qrand(); SP.t = 1; SP.tv = 0; SP.c = 0; SP.cv = 0; SP.h = held.y; SP.hv = 0; SP.spin = 0; sfx.rustle(.45, 1.4); repoint();
+    qFrom = qrand(); SP.t = 1; SP.tv = 0; SP.c = 0; SP.cv = 0; SP.h = held.y; SP.hv = 0; SP.spin = 0; SP.hang = 0; sfx.rustle(.45, 1.4); repoint();
     if (reduce) { SP.h = groundAt(held.x, held.z) + PAPER.radius; finishClose(); }
   }
   // Hovering a top corner of the open letter: that corner draws in, lifts and wrinkles a little, as if about to be crumpled.
@@ -774,9 +775,10 @@ import * as THREE from 'three';
         const up = clamp((SP.h - from.y) / ((held.y - from.y) || 1e-6), 0, 1);
         if (up > .25) [SP.t, SP.tv] = spring(SP.t, SP.tv, 1, 60, 14, dt);
         if (up > .45) [SP.c, SP.cv] = spring(SP.c, SP.cv, 0, 48, 13, dt);
-      } else {                                                            // crumpled where it hangs, then it falls
-        [SP.c, SP.cv] = spring(SP.c, SP.cv, 1, 85, 17, dt);
-        if (SP.c > .72) { SP.hv -= PAPER.gravity * dt; SP.h += SP.hv * dt; SP.spin += dt * (2 + Math.abs(SP.hv) * 6); }
+      } else {                                                            // crumpled in place, gathered into the middle of the page; it hangs
+        [SP.c, SP.cv] = spring(SP.c, SP.cv, 1, 85, 17, dt);                // there a beat once it is a ball, then it falls
+        if (SP.c > .985 && Math.abs(SP.cv) < .4) SP.hang += dt;
+        if (SP.hang > .3) { SP.hv -= PAPER.gravity * dt; SP.h += SP.hv * dt; SP.spin += dt * (2 + Math.abs(SP.hv) * 6); }
       }
       const c = clamp(SP.c, 0, 1), tt = SP.t;
       C = V3(from.x + (held.x - from.x) * tt, SP.h, from.z + (held.z - from.z) * tt);
