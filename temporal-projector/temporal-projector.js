@@ -17,7 +17,7 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { SCENES, HOLO_DOTS, MAX_BONES } from './holo-scenes.js?v=13';   // versioned: a cached copy must never outlive a change
+import { SCENES, HOLO_DOTS, MAX_BONES } from './holo-scenes.js?v=14';   // versioned: a cached copy must never outlive a change
 
 const DATES = [
   { label: '1996', angle: 210 },
@@ -320,9 +320,10 @@ function makeMaterials() {
     ink_graphite: P({ color: 0x141415, roughness: 0.82 }),
     ink_white: P({ color: 0xe9e9e6, roughness: 0.82 }),
     ink_orange: P({ color: 0xff3a0c, roughness: 0.82 }),
-    coated_glass: P({ color: 0xffffff, metalness: 0, roughness: 0, transmission: 1,
-      thickness: 0.002, ior: 1.52, iridescence: 1, iridescenceIOR: 1.38,
-      iridescenceThicknessRange: [260, 420], specularIntensity: 1 }),
+    // thin coated glass: see-through with its anti-reflection sheen and crisp reflections. No transmission: in three.js
+    // that renders the whole scene a second time every frame (over half the frame's GPU time) for a few lens pixels.
+    coated_glass: P({ color: 0xffffff, metalness: 0, roughness: 0, transparent: true, opacity: 0.22, depthWrite: false,
+      ior: 1.52, iridescence: 1, iridescenceIOR: 1.38, iridescenceThicknessRange: [260, 420], specularIntensity: 1 }),
     body_warm_white: P({ color: 0xece9e2, roughness: 0.52, sheen: 0.25, sheenColor: 0xffffff, sheenRoughness: 0.8 }),
     trim_grey: P({ color: 0xc9cdd2, roughness: 0.5 }),
     p_orange: P({ color: 0xf0531f, roughness: 0.42, clearcoat: 0.1, clearcoatRoughness: 0.5,
@@ -1326,7 +1327,7 @@ class TemporalProjector extends HTMLElement {
 
     const beam = new THREE.Mesh(
       new THREE.CylinderGeometry(HOLO.r1, HOLO.r0, HOLO.top, 64, 1, true).translate(0, HOLO.top / 2, 0),
-      new THREE.ShaderMaterial({ ...blend, side: THREE.DoubleSide, vertexShader: HOLO_BEAM_VS, fragmentShader: HOLO_BEAM_FS,
+      new THREE.ShaderMaterial({ ...blend, side: THREE.BackSide, vertexShader: HOLO_BEAM_VS, fragmentShader: HOLO_BEAM_FS,   // the far wall only: half the fill
         uniforms: { uGrow: U(0), uTime: U(0), uAlpha: U(0), uPulse: U(0), uCol: U(HOLO_INK.clone()) } }));
     beam.renderOrder = 2;
     group.add(beam);
@@ -1411,7 +1412,7 @@ class TemporalProjector extends HTMLElement {
     let p;
     try {
       if (!this._worker) {
-        this._worker = new Worker(new URL('./holo-worker.js?v=13', import.meta.url), { type: 'module' });
+        this._worker = new Worker(new URL('./holo-worker.js?v=14', import.meta.url), { type: 'module' });
         this._jobs = new Map();
         this._worker.onmessage = ({ data }) => { const j = this._jobs.get(data.key); if (!j) return; this._jobs.delete(data.key); data.error ? j.fail(new Error(data.error)) : j.ok(data.d); };
         this._worker.onerror = () => { for (const j of this._jobs.values()) j.fail(new Error('worker failed')); this._jobs.clear(); this._worker = null; this._noWorker = true; };
@@ -1503,7 +1504,7 @@ class TemporalProjector extends HTMLElement {
     u.uCell.value = THREE.MathUtils.clamp(imgPx / 95, 1.5, 2.8) * this.renderer.getPixelRatio();
     bu.uGrow.value = grow;
     bu.uTime.value = t;
-    bu.uAlpha.value = Math.min(1, k * 3) * flicker * 0.55;   // the beam stays quiet behind the subject
+    bu.uAlpha.value = Math.min(1, k * 3) * flicker * 0.8;   // one side drawn, so a little more of it   // the beam stays quiet behind the subject
     bu.uPulse.value = pulse;
     bu.uCol.value.lerpVectors(HOLO_INK, HOLO_SIGNAL, future * 0.85);
     mu.uTime.value = t;
@@ -1527,19 +1528,23 @@ class TemporalProjector extends HTMLElement {
     }
     if (c.A) {
       cu.uFadeA.value.fill(1); cu.uFadeB.value.fill(1);
-      const fit = (bones, d) => { const f = d?.fit; if (!f) return; const M = new THREE.Matrix4().makeTranslation(f[1], f[2], f[3]).multiply(new THREE.Matrix4().makeScale(f[0], f[0], f[0])); for (const b of bones) b.premultiply(M); };
+      const fit = (bones, d) => {   // each subject's fit, built once and kept with its data
+        const f = d?.fit; if (!f) return;
+        if (!d.fitM) d.fitM = new THREE.Matrix4().makeTranslation(f[1], f[2], f[3]).multiply(new THREE.Matrix4().makeScale(f[0], f[0], f[0]));
+        for (const b of bones) b.premultiply(d.fitM);
+      };
       SCENES[c.A].anim(t, cu.uBonesA.value, cu.uFadeA.value); fit(cu.uBonesA.value, c.dataA);
       if (c.B) { SCENES[c.B].anim(t, cu.uBonesB.value, cu.uFadeB.value); fit(cu.uBonesB.value, c.dataB); }
       else { cu.uBonesB.value.forEach((b, i) => b.copy(cu.uBonesA.value[i])); cu.uFadeB.value.set ? cu.uFadeB.value.set(cu.uFadeA.value) : cu.uFadeA.value.forEach((v, i) => (cu.uFadeB.value[i] = v)); }
     }
     c.pts.visible = c.on > 0.003 && !!c.A;
     // it turns to you around its vertical axis, and leans a little toward your eye (more for faces)
-    const eye = h.group.worldToLocal(this.camera.position.clone()), lean = (SCENES[c.B || c.A]?.lean ?? 0.2);
+    const eye = h.group.worldToLocal((this._eyeV ??= new THREE.Vector3()).copy(this.camera.position)), lean = (SCENES[c.B || c.A]?.lean ?? 0.2);
     c.pts.rotation.y = Math.atan2(eye.x, eye.z);
     c.pts.rotation.x = -Math.atan2(eye.y - (HOLO.gap + HOLO.h / 2), Math.hypot(eye.x, eye.z)) * lean;
-    const dist = this.camera.position.distanceTo(c.pts.getWorldPosition(new THREE.Vector3()));
+    const dist = this.camera.position.distanceTo(c.pts.getWorldPosition(this._ptsV ??= new THREE.Vector3()));
     cu.uSize.value = THREE.MathUtils.clamp(imgPx / 210, 0.9, 2.4) * this.renderer.getPixelRatio() * dist;
-    const cz = c.pts.localToWorld(new THREE.Vector3(0, 0.5, 0)).applyMatrix4(this.camera.matrixWorldInverse).z;
+    const cz = c.pts.localToWorld((this._czV ??= new THREE.Vector3()).set(0, 0.5, 0)).applyMatrix4(this.camera.matrixWorldInverse).z;
     cu.uLit.value = SCENES[c.B || c.A]?.lit ?? 1;
     cu.uCenterZ.value = cz; cu.uDepth.value = HOLO.h * 0.45;
     cu.uTime.value = t;
@@ -1549,6 +1554,7 @@ class TemporalProjector extends HTMLElement {
     cu.uShine.value = reduceMotion || sp > 1 ? 99 : -0.15 + sp * 1.3;
     cu.uAlpha.value = Math.min(1, k * 2.5) * flicker * c.on;
     u.uAlpha.value *= 1 - c.on;                                          // the flat picture (or the year) gives way to the dots
+    h.image.visible = u.uAlpha.value > 0.002;                            // and stops drawing once it has (raycasts still find it)
     this.lensGlow.material.opacity = 0.85 * grow * (1 + pulse);
 
     // caption above the image, in page type

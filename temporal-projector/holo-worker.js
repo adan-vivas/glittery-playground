@@ -1,5 +1,5 @@
 // Builds the hologram's subjects off the main thread, so the page never stalls while dots are sculpted.
-import { SCENES } from './holo-scenes.js?v=13';
+import { SCENES } from './holo-scenes.js?v=14';
 
 onmessage = async ({ data: { key, entry } }) => {
   try {

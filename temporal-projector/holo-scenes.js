@@ -14,7 +14,7 @@
 import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js';
 
 export const HOLO_DOTS = 56000;
-export const MAX_BONES = 24;
+export const MAX_BONES = 8;   // the richest rig uses 5; 8 keeps the shader well inside the 256 uniform vectors low-end GPUs guarantee
 
 const rngOf = (seed) => () => {
   seed = (seed + 0x6d2b79f5) | 0;
@@ -29,13 +29,14 @@ const loadImage = async (src) => createImageBitmap(await (await fetch(src)).blob
 const asset = (name) => new URL(`./assets/holo/${name}.jpg`, import.meta.url).href;
 
 // ------------------------------------------------------------------ the skeleton
+const _m = new THREE.Matrix4(), _q = new THREE.Quaternion(), _e = new THREE.Euler(), _v = new THREE.Vector3(), _sc = new THREE.Vector3();
+const _T1 = new THREE.Matrix4(), _T2 = new THREE.Matrix4(), _I = new THREE.Matrix4();   // reused every frame: no garbage
 class Rig {
   constructor() { this.names = []; this.parent = []; this.pivot = []; }
   bone(name, parent, pivot = [0, 0, 0]) { this.names.push(name); this.parent.push(parent ? this.names.indexOf(parent) : -1); this.pivot.push(pivot); return this; }
   id(name) { const i = this.names.indexOf(name || 'root'); if (i < 0) throw new Error('no bone ' + name); return i; }
   apply(pose, out) {
-    const m = new THREE.Matrix4(), q = new THREE.Quaternion(), e = new THREE.Euler(), v = new THREE.Vector3(), sc = new THREE.Vector3();
-    const T1 = new THREE.Matrix4(), T2 = new THREE.Matrix4(), I = new THREE.Matrix4();
+    const m = _m, q = _q, e = _e, v = _v, sc = _sc, T1 = _T1, T2 = _T2, I = _I;
     for (let i = 0; i < this.names.length; i++) {
       const p = pose[this.names[i]] || {}, pv = this.pivot[i], s = p.s ?? 1, t = p.t || [0, 0, 0], r = p.r || [0, 0, 0];
       if (Array.isArray(s)) sc.set(s[0], s[1], s[2]); else sc.set(s, s, s);
