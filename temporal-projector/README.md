@@ -3,8 +3,10 @@
 A speculative palm-sized device in the spirit of Dieter Rams. A dial jumps between
 1996, 2006, 2016, 2026 and the future; the orange key, **Plausible Random Futures**,
 jumps to the future and projects a plausible one. A small front lens projects the
-selected date onto the table. The lens on top will project images into the air
-(not built yet).
+selected date onto the table, and the lens on top projects a hologram into the air:
+a cone of light with a dithered image floating inside it. Power on and it rises out
+of the lens; turn the dial or press the key and it dissolves to the next picture.
+Without pictures it shows the year. `../projector.html` gives it a portrait per era.
 
 ![Hero render](renders/zeitlinse_hero.jpg)
 
@@ -41,9 +43,31 @@ Then open <http://localhost:4317>.
 <temporal-projector date="2026"></temporal-projector>
 ```
 
-- **Attributes:** `date` (`1996` `2006` `2016` `2026` `FUTURE`), `power` (`on`/`off`), `zoom`, `muted`, `src`, `shadow`
-- **Events:** `datechange` → `{ date, projected }`, `powerchange` → `{ on }`
-- **Methods:** `setDate(label)`, `randomFuture()`, `togglePower()`
+- **Attributes:** `date` (`1996` `2006` `2016` `2026` `FUTURE`), `power` (`on`/`off`), `zoom`, `muted`, `src`, `shadow`,
+  `table` (a fixed view down onto a desk, lit from the top left, shadows on the page colour; no orbiting),
+  `movable` (with `table`: press the projector's body to lift it a few centimetres; it drops back when let go)
+- **Table scene:** `setScene({ camera, light, device, room })` and `getScene()` change the table view live (see `TABLE_SCENE` in the
+  source); `tickers` (a Set of functions called each frame), `floorRay(x, y)`, `toScreen(v)`, `keyLight`, `lightDir`, `rig` (the placed projector), `footprintSDF(x, z)`, `roomSDF(x, z)`
+- **Table placement** (CSS custom properties): `--stage-x`, `--stage-y` (where the device sits, as fractions of the element),
+  `--stage-scale` (its size, as a fraction of the element's height)
+- **Events:** `datechange` → `{ date, projected, label, future }`, `powerchange` → `{ on }`
+- **Methods:** `setDate(label)`, `randomFuture()`, `togglePower()`, `setContent({ dates, futures })`,
+  `anchor(part)` (screen position of `power`, `key`, `dial`, `lens` or `hologram`), `hologramHit(x, y)`,
+  `footprint()` (the device's outline on screen, so things on the page can bump into it)
+
+Give the hologram pictures with `setContent`. Images are URLs (data URLs work). `sheet` plays a
+sprite sheet, `mask` cuts out a subject (its green channel), `focus` keeps a point in view, and
+`invert: false` makes bright pixels the dots. When `futures` is set, the orange key picks one of them.
+
+```js
+el.setContent({
+  dates: {
+    '2026': { image: 'now.jpg', mask: 'now-mask.png', label: 'Now' },
+    '1996': { image: 'sheet.jpg', sheet: [6, 4], fps: 25, label: 'The beginning' },
+  },
+  futures: [{ year: 2036, image: 'farm.jpg', label: 'A farm' }],
+});
+```
 - **Interaction:** drag or click the dial, press the orange key, press I/O; drag elsewhere to orbit.
   Keyboard: arrows turn the dial, Enter presses the key, P toggles power.
 
