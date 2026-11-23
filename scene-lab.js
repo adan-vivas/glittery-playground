@@ -1,4 +1,4 @@
-// Scene lab: a fixture and debugging tool for projector.html's table scene.
+// Scene lab: a fixture and debugging tool for the homepage's table scene.
 // Open it with ?lab in the URL, or Shift+L. Everything here changes the live scene: the camera that frames the table,
 // the light (and with it every shadow), the room box around the table, and the paper's physics. Because the paper lives in
 // the same 3D world as the projector, moving the camera changes how far it visibly falls, where it can roll and how it is lit.
