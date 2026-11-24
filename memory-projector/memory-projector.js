@@ -322,7 +322,7 @@ class MemoryProjector extends HTMLElement {
   async _loadMemories(url) {
     const href = new URL(url, location.href).href;
     try {
-      const res = await fetch(href);
+      const res = await fetch(href, { cache: 'no-cache' });   // always ask: a memory may have arrived since last time
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       await this.setMemories(await res.json(), href);
     } catch (e) {
