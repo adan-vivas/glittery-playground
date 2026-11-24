@@ -18,6 +18,7 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { createPlaylist } from './lib/playlist.js';
 import { DepthHologram } from './holo-depth.js';
+import { wrapLines, crawlState } from './lib/crawl.js';
 
 const TOP_Y = 0.021;                // top surface height (m)
 const POWER_SLIDE = 0.0088;         // the power knob slides this far right when on
@@ -25,7 +26,16 @@ const KEY_TRAVEL = -0.0011;         // how far a key goes down when pressed
 const LED_P = new THREE.Vector3(0.0255, TOP_Y - 0.0023, -0.014);    // green strip the knob uncovers
 const MEMORY_LED_P = new THREE.Vector3(0.0455, TOP_Y + 0.0002, -0.014);   // the memory light (from the GLB export)
 const APERTURE_P = new THREE.Vector3(0.0, 0.011, 0.0312);           // front projection lens, centred
-const PROJ_P = new THREE.Vector3(0.0, 0.0002, 0.082);               // where it throws the story on the table
+// The story's crawl: a patch of light the front lens throws on the table, in front of the device. The paragraph scrolls
+// through it, away from you toward the lens, fading in at the near edge and out at the far one. Tuned by eye.
+const CRAWL = {
+  at: new THREE.Vector3(0.0, 0.0002, 0.122),   // centre of the patch on the table (m)
+  w: 0.2, d: 0.135,                            // its width and depth (m): wider than the device, so it reads on a desktop
+  px: [1024, 692],                             // canvas size (same aspect as the patch)
+  font: 44, lineHeight: 1.35, margin: 64,      // px on the canvas
+  fade: 0.18,                                  // fraction of the depth faded at each end
+  wordsPerSecond: 2, pause: 2.5,
+};
 const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
 
 // The hologram rises from the top lens: a cone of light, and a dithered image floating inside it.
@@ -496,17 +506,16 @@ class MemoryProjector extends HTMLElement {
     this.frontGlow = sprite(0xffc98a, 0.016, APERTURE_P);
 
     // the year, thrown onto the table by the front lens
-    this.projCanvas = document.createElement('canvas');
-    this.projCanvas.width = 1024;
-    this.projCanvas.height = 560;
+    this.projCanvas = this._crawlCanvas = document.createElement('canvas');
+    [this.projCanvas.width, this.projCanvas.height] = CRAWL.px;
     this.projTex = new THREE.CanvasTexture(this.projCanvas);
     this.projTex.colorSpace = THREE.SRGBColorSpace;
     this.projTex.anisotropy = 8;
-    this.proj = new THREE.Mesh(new THREE.PlaneGeometry(0.1, 0.1 * 560 / 1024),   // the year, and the line under it, cast on the floor in the beam's blue
+    this.proj = new THREE.Mesh(new THREE.PlaneGeometry(CRAWL.w, CRAWL.d),   // the story, cast on the table in the beam's blue
       new THREE.MeshBasicMaterial({ map: this.projTex, transparent: true, depthWrite: false, toneMapped: false,
         color: new THREE.Color(0.06, 0.1, 0.8), opacity: 1 }));
     this.proj.rotation.x = -Math.PI / 2;
-    this.proj.position.copy(PROJ_P);
+    this.proj.position.copy(CRAWL.at);
     this.floorRig.add(this.proj);
 
     this._buildHologram();
@@ -963,7 +972,7 @@ class MemoryProjector extends HTMLElement {
     this.powerSpring.t = on ? POWER_SLIDE : 0;
     this.projFade.t = on ? 1 : 0;
     this.holoSpring.t = on ? 1 : 0;
-    if (on) this._onMemory(this.playlist.current, { first: false });
+    if (on) { this._crawlNext = this.playlist.current?.story || ''; this._onMemory(this.playlist.current, { first: false }); }
     else this.depth?.show(null);                                       // off: the memory drains back into the lens
     this.dispatchEvent(new CustomEvent('powerchange', { detail: { on }, bubbles: true, composed: true }));
     this._announce();
@@ -973,6 +982,54 @@ class MemoryProjector extends HTMLElement {
   _drawProjection() {
     const c = this.projCanvas, g = c.getContext('2d');
     g.clearRect(0, 0, c.width, c.height);
+    this.projTex.needsUpdate = true;
+  }
+
+  // Lay out a story for the crawl (or nothing). Called when the memory changes; the crawl restarts.
+  _setCrawl(story) {
+    const g = this.projCanvas.getContext('2d'), font = this._crawlFont();
+    g.font = font;
+    const lines = wrapLines(story || '', (t) => g.measureText(t).width, CRAWL.px[0] - CRAWL.margin * 2);
+    const words = String(story || '').split(/\s+/).filter(Boolean).length;
+    this._crawl = { lines, words, font, t0: performance.now() / 1000 };
+    this._drawCrawl(this._crawl.t0);
+  }
+
+  _crawlFont() {
+    const family = getComputedStyle(this).fontFamily || '"Helvetica Neue", Helvetica, Arial, sans-serif';
+    return `400 ${CRAWL.font}px ${family}`;
+  }
+
+  // Draw the crawl at time `now` (s). Moving text, faded at the near and far edges; still under reduced motion.
+  _drawCrawl(now) {
+    const c = this.projCanvas, g = c.getContext('2d'), cr = this._crawl, [W, H] = CRAWL.px;
+    g.clearRect(0, 0, W, H);
+    if (cr && cr.lines.length) {
+      const lh = CRAWL.font * CRAWL.lineHeight;
+      const st = reduceMotion ? { offset: -lh * 0.5, alpha: 1 }
+        : crawlState(now - cr.t0, { lineCount: cr.lines.length, lineHeight: lh, viewHeight: H, words: cr.words,
+          wordsPerSecond: CRAWL.wordsPerSecond, pause: CRAWL.pause });
+      if (st.alpha > 0) {
+        g.save();
+        g.font = cr.font;
+        g.fillStyle = '#fff';
+        g.textAlign = 'left';
+        g.textBaseline = 'top';
+        const top = -st.offset;                 // the text's first line, from the canvas top (the far edge, by the lens)
+        cr.lines.forEach((l, i) => {
+          const y = top + i * lh;
+          if (y > -lh && y < H) g.fillText(l, CRAWL.margin, y);
+        });
+        // fade in at the near edge, out at the far edge
+        g.globalCompositeOperation = 'destination-in';
+        const f = g.createLinearGradient(0, 0, 0, H);
+        f.addColorStop(0, 'rgba(0,0,0,0)'); f.addColorStop(CRAWL.fade, 'rgba(0,0,0,1)');
+        f.addColorStop(1 - CRAWL.fade, 'rgba(0,0,0,1)'); f.addColorStop(1, 'rgba(0,0,0,0)');
+        g.fillStyle = f;
+        g.fillRect(0, 0, W, H);
+        g.restore();
+      }
+    }
     this.projTex.needsUpdate = true;
   }
 
@@ -1079,6 +1136,7 @@ class MemoryProjector extends HTMLElement {
 
   // The hologram shows this memory (null: nothing). `first`: its first showing here, so it develops slowly.
   _onMemory(memory, { first = false } = {}) {
+    if (memory !== this._memory || !this._crawl) this._crawlNext = memory?.story || '';   // dissolve to the new story
     this._memory = memory;
     this.depth?.show(memory?.url || null, { developing: first });
   }
@@ -1143,7 +1201,14 @@ class MemoryProjector extends HTMLElement {
     this.projFade.step(dt);
     this._applyLights(this.lightSpring.v);
     const flicker = this.state.power ? 1 - 0.025 * Math.random() : 1;
-    this.proj.material.opacity = 0.42 * this.projFade.v * flicker;
+    // the crawl: a new story dissolves in (the old one fades out first), then it keeps moving
+    const now = performance.now() / 1000;
+    if (this._crawlNext !== undefined) {
+      this._crawlFade = Math.max(0, (this._crawlFade ?? 1) - dt / 0.35);
+      if (this._crawlFade === 0 || !this._crawl) { this._setCrawl(this._crawlNext); this._crawlNext = undefined; }
+    } else this._crawlFade = Math.min(1, (this._crawlFade ?? 1) + dt / 0.35);
+    if (this.state.power && this._crawl?.lines.length && !reduceMotion) this._drawCrawl(now);
+    this.proj.material.opacity = 0.62 * this.projFade.v * flicker * (this._crawlFade ?? 1);
     if (!this.table) this.controls.update();
     this._tickHologram(dt, performance.now());
     this._tickMist(dt);
