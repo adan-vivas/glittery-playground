@@ -46,3 +46,17 @@ test('nothing kept in the first frame: an empty memory, no crash', async () => {
   const r = await runPipeline({ frames, matter, keep: new Set() });
   assert.deepEqual(r.masks.map(keptPixels), [0, 0]);
 });
+
+test('with a depth model, the published depth follows its shape inside the figure (nearer = brighter)', async () => {
+  const { frames, matter } = clip([disc(W, H, 60, 70, 30), disc(W, H, 60, 70, 30)]);
+  // a pretend depth model: the left of the frame is near, the right is far (bigger = nearer, like Depth Anything)
+  const depthModel = { estimate: async () => { const d = new Float32Array(W * H); for (let i = 0; i < W * H; i++) d[i] = 10 - (i % W) / 12; return { depth: d, w: W, h: H }; } };
+  const first = labelFigures(frames[0].alpha, W, H);
+  const r = await runPipeline({ frames, matter, depthModel, keep: new Set(first.figures.map((f) => f.id)) });
+  const d = r.depth[0], S = 256, row = Math.round(0.6 * S);
+  const xs = []; for (let x = 0; x < S; x++) if (d[row * S + x] > 0) xs.push(x);
+  const left = d[row * S + xs[Math.floor(xs.length * 0.2)]], right = d[row * S + xs[Math.floor(xs.length * 0.8)]];
+  assert.ok(left > right + 0.2, `left ${left} should be nearer than right ${right}`);
+  assert.equal(d[5], 0, 'outside the figure stays empty');
+  assert.ok(Math.min(...xs.map((x) => d[row * S + x])) > 0, 'every figure pixel keeps some depth');
+});

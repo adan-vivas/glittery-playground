@@ -7,10 +7,9 @@
 // Fallback, MODNet (Apache-2.0): a portrait matting model, small and quick, that runs anywhere; it keeps the people
 // but may drop what they hold. The page says which one ran, and why.
 // Not used: @imgly/background-removal and Robust Video Matting (AGPL / GPL), MediaPipe (people only, no objects).
-// 1.20: its WebGPU backend (JSEP) runs BiRefNet within Chrome's 10 storage buffers per shader; 1.31's native
-// WebGPU backend needs 11 and fails on a Mac.
-const ORT = 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.20.1/dist/';
+import { loadOrt } from './ort.js';
 export const MODELS = {
+  depth: 'https://huggingface.co/onnx-community/depth-anything-v2-small/resolve/4472b7362082ad9968fee890ca0f1e5aca36b93d/onnx/',
   birefnet: 'https://huggingface.co/onnx-community/BiRefNet_lite-ONNX/resolve/de15b22ba131738a16dff04aab8bdf8dc32e3ac1/onnx/',
   modnet: 'https://huggingface.co/Xenova/modnet/resolve/fa2fa546052fba4c08921230a26cc69a333fca12/onnx/',
 };
@@ -107,8 +106,7 @@ async function modnet(ort, gpu, base, onProgress) {
  * { name, license, device, keepsObjects, fallback?: string (why MODNet), segment(frame) → { alpha: Float32Array 0..1, w, h } }.
  */
 export async function createMatter({ onProgress, models = MODELS } = {}) {
-  const ort = await import(ORT + 'ort.webgpu.min.mjs');
-  ort.env.wasm.wasmPaths = ORT;
+  const ort = await loadOrt();
   const adapter = navigator.gpu && await navigator.gpu.requestAdapter().catch(() => null);
   let why;
   if (adapter) {

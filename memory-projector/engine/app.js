@@ -1,6 +1,7 @@
 // The engine page: load → write → pick → process → check → export. Runs entirely in this browser.
 import { extractFrames, probe } from './frames.js';
 import { createMatter, createFakeMatter } from './matte.js';
+import { createDepthModel } from './depthmodel.js';
 import { labelFigures } from './figures.js';
 import { runPipeline } from './pipeline.js';
 import { encodeDepthMp4 } from './encode.js';
@@ -12,7 +13,15 @@ const $ = (id) => document.getElementById(id);
 const FAKE = new URLSearchParams(location.search).get('matter') === 'fake';   // tests: magenta is foreground
 const state = { file: null, duration: 0, start: 0, pick: null, keep: new Set(), result: null, blob: null, idEdited: false };
 const view = createStageView($('stage-view'));
-let matterP = null;
+let matterP = null, depthP = null;
+
+// The depth model: real shape for the figures. Tests (?matter=fake) use the simple balloon instead.
+function depthModel() {
+  if (FAKE) return Promise.resolve(null);
+  depthP ??= createDepthModel({ onProgress: (p) => { if (p.total) status(`Downloading the depth model, once: ${Math.round(p.loaded / p.total * 100)} %`); } })
+    .catch((e) => { console.warn(e); status(`The depth model couldn\u2019t load (${e.message}); using the simple balloon shape.`); return null; });
+  return depthP;
+}
 
 const enable = (id, on) => $(id).setAttribute('aria-disabled', on ? 'false' : 'true');
 const status = (t) => { $('status').textContent = t; };
@@ -137,10 +146,10 @@ $('process').addEventListener('click', async () => {
     const frames = await extractFrames(state.file, { start: state.pick.start, seconds: MAX_SECONDS, fps: FPS,
       onFrame: (i, n, f) => { view.drawVideo(f); status(`Reading frames… ${i + 1} / ${n}`); } });
     stage('frames', 'done');
-    const m = await matter();
+    const m = await matter(), dm = await depthModel();
     let current = 'cutout';
     stage('cutout', 'running');
-    const result = await runPipeline({ frames, matter: m, keep: state.keep, firstAlpha: state.pick.alpha,
+    const result = await runPipeline({ frames, matter: m, depthModel: dm, keep: state.keep, firstAlpha: state.pick.alpha,
       onStage: (name, i, n, d) => {
         if (name !== current) { stage(current, 'done'); current = name; stage(name, 'running'); }
         status(`${name[0].toUpperCase() + name.slice(1)}… ${i + 1} / ${n}`);

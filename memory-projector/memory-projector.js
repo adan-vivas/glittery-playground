@@ -30,7 +30,7 @@ const APERTURE_P = new THREE.Vector3(0.0, 0.011, 0.0312);           // front pro
 // The story's crawl: a patch of light the front lens throws on the table, in front of the device. The paragraph scrolls
 // through it, away from you toward the lens, fading in at the near edge and out at the far one. Tuned by eye.
 const CRAWL = {
-  at: new THREE.Vector3(0.0, 0.0002, 0.122),   // centre of the patch on the table (m)
+  at: new THREE.Vector3(0.0, 0.0002, 0.108),   // centre of the patch on the table (m): its far edge just clears the front lens
   w: 0.2, d: 0.135,                            // its width and depth (m): wider than the device, so it reads on a desktop
   px: [1024, 692],                             // canvas size (same aspect as the patch)
   font: 44, lineHeight: 1.35, margin: 64,      // px on the canvas
@@ -508,7 +508,7 @@ class MemoryProjector extends HTMLElement {
     this.ledGlow = sprite(0x3dff8a, 0.007, LED_P);
     this.memoryGlow = sprite(0x5b7cff, 0.008, MEMORY_LED_P);   // the memory light: a new memory is developing
     this.memoryGlow.material.opacity = 0;
-    this.frontGlow = sprite(0xffc98a, 0.016, APERTURE_P);
+    this.frontGlow = sprite(0x7f95ff, 0.018, APERTURE_P);   // the front lens, lit in the beam's blue
 
     // the year, thrown onto the table by the front lens
     this.projCanvas = this._crawlCanvas = document.createElement('canvas');
@@ -522,6 +522,27 @@ class MemoryProjector extends HTMLElement {
     this.proj.rotation.x = -Math.PI / 2;
     this.proj.position.copy(CRAWL.at);
     this.floorRig.add(this.proj);
+
+    // the light the front lens throws on the table: a fan from the lens out over the story, brightest at the lens
+    const z0 = APERTURE_P.z + 0.002, z1 = CRAWL.at.z + CRAWL.d / 2, w0 = 0.024, w1 = CRAWL.w * 1.05;
+    const fan = new THREE.BufferGeometry();
+    fan.setAttribute('position', new THREE.BufferAttribute(new Float32Array([-w0 / 2, 0.00025, z0, w0 / 2, 0.00025, z0, w1 / 2, 0.00025, z1, -w1 / 2, 0.00025, z1]), 3));
+    fan.setAttribute('uv', new THREE.BufferAttribute(new Float32Array([0, 0, 1, 0, 1, 1, 0, 1]), 2));
+    fan.setIndex([0, 2, 1, 0, 3, 2]);
+    this.projBeam = new THREE.Mesh(fan, new THREE.ShaderMaterial({
+      transparent: true, depthWrite: false, side: THREE.DoubleSide,
+      uniforms: { uAlpha: { value: 0 }, uCol: { value: HOLO_INK.clone() } },
+      vertexShader: 'varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.); }',
+      fragmentShader: `uniform float uAlpha; uniform vec3 uCol; varying vec2 vUv;
+        void main(){
+          float across = 1. - pow(abs(vUv.x - .5) * 2., 2.5);          // soft sides
+          float along = pow(1. - vUv.y, 1.6) * .8 + .2 * smoothstep(1., .55, vUv.y);   // bright at the lens, a wash over the story
+          gl_FragColor = vec4(uCol, uAlpha * .16 * across * along);
+        }`,
+    }));
+    this.projBeam.renderOrder = -1;
+    this.projBeam.visible = false;
+    this.floorRig.add(this.projBeam);
 
     this._buildHologram();
     this._buildMist();
@@ -1215,7 +1236,7 @@ class MemoryProjector extends HTMLElement {
     this._memoryK = (this._memoryK ?? 0) + (want - (this._memoryK ?? 0)) * Math.min(1, (this._dtLight ?? 0.016) * 6);
     this.M.memory_led.emissiveIntensity = 4 * this._memoryK;
     this.memoryGlow.material.opacity = this._memoryK;
-    this.frontGlow.material.opacity = 0.1 * k;
+    this.frontGlow.material.opacity = 0.45 * k;
   }
 
   _tick() {
@@ -1236,6 +1257,8 @@ class MemoryProjector extends HTMLElement {
     } else this._crawlFade = Math.min(1, (this._crawlFade ?? 1) + dt / 0.35);
     if (this.state.power && this._crawl?.lines.length && !reduceMotion) this._drawCrawl(now);
     this.proj.material.opacity = 0.62 * this.projFade.v * flicker * (this._crawlFade ?? 1);
+    this.projBeam.material.uniforms.uAlpha.value = this.projFade.v * flicker;
+    this.projBeam.visible = this.projFade.v > 0.005;
     if (!this.table) this.controls.update();
     this._tickHologram(dt, performance.now());
     this._tickMist(dt);

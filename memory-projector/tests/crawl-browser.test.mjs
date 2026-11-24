@@ -32,3 +32,19 @@ test('an empty story leaves the table dark', async () => {
     assert.deepEqual(t.errors, []);
   } finally { await t.close(); }
 });
+
+test('a fan of light runs from the front lens to the story, only while on', async () => {
+  const t = await openPage('/memory-projector/index.html', { waitFor: READY });
+  try {
+    const fan = () => t.page.evaluate(() => { const el = document.querySelector('memory-projector'); return { a: el.projBeam.material.uniforms.uAlpha.value, visible: el.projBeam.visible }; });
+    assert.ok((await fan()).a < 0.01);
+    await t.page.evaluate(() => document.querySelector('memory-projector').togglePower());
+    await t.page.waitForTimeout(1500);
+    const on = await fan();
+    assert.ok(on.visible && on.a > 0.3, `fan at ${on.a}`);
+    // it starts at the lens and reaches the story's far edge
+    const ends = await t.page.evaluate(() => { const b = document.querySelector('memory-projector').projBeam.geometry; b.computeBoundingBox(); return [b.boundingBox.min.z, b.boundingBox.max.z]; });
+    assert.ok(ends[0] < 0.04, `starts at ${ends[0]}`); assert.ok(ends[1] > 0.15, `ends at ${ends[1]}`);
+    assert.deepEqual(t.errors, []);
+  } finally { await t.close(); }
+});

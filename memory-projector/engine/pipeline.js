@@ -26,19 +26,41 @@ function warp(mask, W, H, T) {
  * firstAlpha, or of the first frame's cut-out). onStage(name, i, n, data) after each step of each frame.
  * → { depth: Float32Array[] (SIZE²), encoded: Uint8ClampedArray[], masks, transforms }
  */
-export async function runPipeline({ frames, matter, keep, firstAlpha, minArea, onStage = () => {} }) {
+// Real depth, from a depth model (bigger = nearer), turned into 0..1 inside the kept figures: the 5th to 95th percentile
+// of the figures' own values, eased over time so the figure doesn't pump as it moves. → Float32Array, 0 outside.
+function figureDepth(raw, mask, ease) {
+  const vals = [];
+  for (let i = 0; i < mask.length; i++) if (mask[i] > 0.5) vals.push(raw[i]);
+  const out = new Float32Array(mask.length);
+  if (!vals.length) return out;
+  vals.sort((a, b) => a - b);
+  let lo = vals[Math.floor(vals.length * 0.05)], hi = vals[Math.floor(vals.length * 0.95)];
+  if (ease.lo != null) { lo = ease.lo + 0.35 * (lo - ease.lo); hi = ease.hi + 0.35 * (hi - ease.hi); }
+  ease.lo = lo; ease.hi = hi;
+  const span = Math.max(1e-6, hi - lo);
+  for (let i = 0; i < mask.length; i++) if (mask[i] > 0.5) out[i] = Math.min(1, Math.max(0, (raw[i] - lo) / span));
+  return out;
+}
+
+/**
+ * depthModel (optional): { estimate(frame) → { depth: Float32Array at the frame's size, bigger = nearer } }. With it, the
+ * figures get their real shape (an arm in front of the chest, a snout); without, the silhouette is inflated like a balloon.
+ */
+export async function runPipeline({ frames, matter, keep, firstAlpha, minArea, depthModel, onStage = () => {} }) {
   const n = frames.length, W = frames[0].width, H = frames[0].height, masks = [];
   // Kept figures are followed against the last frame that had any: a frame where the cut-out misses everyone (or the
   // child runs out of shot) doesn't lose them for good. A figure counts as the same one if it lands within `reach` of
   // where kept figures were, so a small ball moving faster than its own size is still followed.
   const reach = Math.max(4, Math.round(0.06 * Math.max(W, H)));
   let near = null;
+  const real = [], ease = {};
   for (let i = 0; i < n; i++) {
     const alpha = i === 0 && firstAlpha ? firstAlpha : (await matter.segment(frames[i])).alpha;
     const lab = labelFigures(alpha, W, H, minArea ? { minArea } : undefined);
     const ids = i === 0 ? keep : near ? trackNear(near, lab) : new Set();
     const m = keepMask(alpha, lab.labels, ids);
     masks.push(m);
+    if (depthModel) real.push(figureDepth((await depthModel.estimate(frames[i])).depth, m, ease));
     if (m.some((v) => v > 0.5)) near = nearKept(m, W, H, reach);
     onStage('cutout', i, n, { frame: frames[i], mask: masks[i], w: W, h: H });
     await tick();
@@ -53,7 +75,12 @@ export async function runPipeline({ frames, matter, keep, firstAlpha, minArea, o
   for (let i = 0; i < n; i++) {
     const warped = warp(masks[i], W, H, T[i]);
     const heightPx = (measures[i] ? measures[i].height : 0.8 * SIZE / T[i].scale) * T[i].scale;
-    let d = inflate(warped, SIZE, SIZE, { heightPx, cut: !!measures[i]?.cut });
+    let d = inflate(warped, SIZE, SIZE, { heightPx, cut: !!measures[i]?.cut });   // the balloon: thin at the edges
+    if (depthModel) {
+      const shape = warp(real[i], W, H, T[i]);
+      for (let p = 0; p < d.length; p++) if (d[p] > 0) d[p] = 0.12 + 0.88 * (0.7 * shape[p] / Math.max(warped[p], 1e-3) + 0.3 * d[p]);
+      for (let p = 0; p < d.length; p++) if (d[p] > 1) d[p] = 1;
+    }
     d = smoothTemporal(last, d, 0.5);
     depth.push(d); last = d;
     onStage('depth', i, n, { depth: d });
