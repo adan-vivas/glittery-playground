@@ -1,7 +1,7 @@
 # Memory Projector — design
 
 Date: 2026-11-23 (revised 2026-11-24 after review)
-Status: for approval
+Status: approved 2026-11-24
 
 ## Intent
 
