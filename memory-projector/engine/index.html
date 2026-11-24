@@ -1,0 +1,140 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex, nofollow">
+  <title>Memory engine</title>
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+        "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"
+      }
+    }
+  </script>
+  <style>
+    :root { --bg: #f4f4f2; --ink: #1a1a1a; --mute: #6b6b6b; --line: #d6d6d2; --beam: rgb(28, 46, 255); --warn: #b3261e; }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; background: var(--bg); color: var(--ink);
+      font: 15px/1.45 "Helvetica Neue", Helvetica, Arial, sans-serif; -webkit-font-smoothing: antialiased; }
+    main { max-width: 1120px; margin: 0 auto; padding: 32px 24px 80px; }
+    h1 { font-size: 22px; font-weight: 500; margin: 0 0 4px; }
+    .lede { color: var(--mute); margin: 0 0 28px; max-width: 62ch; }
+    section { border-top: 1px solid var(--line); padding: 20px 0 24px; display: grid; grid-template-columns: 160px 1fr; gap: 16px; }
+    section > h2 { font-size: 13px; font-weight: 500; text-transform: uppercase; letter-spacing: .08em; margin: 2px 0 0; color: var(--mute); }
+    section[aria-disabled="true"] { opacity: .45; pointer-events: none; }
+    label { display: block; font-size: 13px; color: var(--mute); margin: 0 0 4px; }
+    input[type=text], input[type=date], textarea { width: 100%; font: inherit; padding: 8px 10px; border: 1px solid var(--line); border-radius: 6px; background: #fff; }
+    textarea { min-height: 110px; resize: vertical; }
+    .row { display: grid; grid-template-columns: 2fr 1fr 1fr; gap: 12px; margin-top: 12px; }
+    .note { color: var(--mute); font-size: 13px; margin: 6px 0 0; }
+    .warn { color: var(--warn); font-size: 13px; margin: 6px 0 0; }
+    button { font: inherit; padding: 8px 14px; border-radius: 6px; border: 1px solid var(--ink); background: var(--ink); color: #fff; cursor: pointer; }
+    button.quiet { background: #fff; color: var(--ink); border-color: var(--line); }
+    button:disabled { opacity: .4; cursor: default; }
+    .pick { display: flex; gap: 20px; align-items: start; flex-wrap: wrap; }
+    #pick-canvas { max-width: 420px; width: 100%; border-radius: 6px; background: #ddd; cursor: pointer; }
+    .figures { display: flex; flex-direction: column; gap: 8px; }
+    button.figure { background: #fff; color: var(--ink); border-color: var(--beam); text-align: left; }
+    button.figure[aria-pressed="false"] { border-color: var(--line); color: var(--mute); text-decoration: line-through; }
+    .stages { list-style: none; display: flex; gap: 16px; flex-wrap: wrap; padding: 0; margin: 0 0 12px; font-size: 13px; color: var(--mute); }
+    .stage[data-state="running"] { color: var(--beam); }
+    .stage[data-state="done"] { color: var(--ink); }
+    .stage[data-state="done"]::before { content: "\2713\00a0"; }
+    #stage-view { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
+    .pane { margin: 0; }
+    .pane canvas { width: 100%; aspect-ratio: 1; border-radius: 6px; background: #e4e4e2; display: block; }
+    .pane figcaption { font-size: 12px; color: var(--mute); margin-top: 4px; }
+    .tools { display: flex; gap: 8px; margin-top: 12px; }
+    #public { width: 256px; height: 256px; background: #000; border-radius: 6px; display: block; }
+    .status { font-size: 13px; color: var(--mute); min-height: 1.4em; }
+    @media (max-width: 760px) { section { grid-template-columns: 1fr; } .row { grid-template-columns: 1fr; } #stage-view { grid-template-columns: repeat(2, 1fr); } }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Memory engine</h1>
+    <p class="lede">Turns a short clip into a memory for the projector: the people in it, cut out, steadied and given depth.
+      Everything happens in this browser. The video is never uploaded or saved; only the depth leaves, when you export.</p>
+
+    <section id="s-load">
+      <h2>1 · Load</h2>
+      <div>
+        <label for="file">A clip (up to 7 seconds are used)</label>
+        <input id="file" type="file" accept="video/*">
+        <div id="trim" hidden>
+          <label for="start" style="margin-top:12px">Start at <span id="start-out">0.0</span> s</label>
+          <input id="start" type="range" min="0" max="0" step="0.1" value="0" style="width:100%">
+        </div>
+        <p class="note" id="trim-note"></p>
+        <p class="warn" id="load-error" hidden></p>
+      </div>
+    </section>
+
+    <section id="s-write">
+      <h2>2 · Write</h2>
+      <div>
+        <label for="story">The story, a paragraph</label>
+        <textarea id="story" placeholder="What happened, in your words."></textarea>
+        <p class="note"><span id="words">0</span> words</p>
+        <p class="warn" id="words-warn" hidden>That's more than about 120 words: on the table it will take a long time to read.</p>
+        <div class="row">
+          <div><label for="title">Title (only read out to screen readers)</label><input id="title" type="text"></div>
+          <div><label for="date">Date (orders the memories)</label><input id="date" type="date"></div>
+          <div><label for="id">File name</label><input id="id" type="text" value="memory"></div>
+        </div>
+      </div>
+    </section>
+
+    <section id="s-pick" aria-disabled="true">
+      <h2>3 · Pick</h2>
+      <div>
+        <p class="note" id="matter-note">Load a clip to find the figures in its first frame.</p>
+        <div class="pick">
+          <canvas id="pick-canvas" width="512" height="288"></canvas>
+          <div class="figures" id="figures"></div>
+        </div>
+      </div>
+    </section>
+
+    <section id="s-process" aria-disabled="true">
+      <h2>4 · Process</h2>
+      <div>
+        <ol class="stages">
+          <li class="stage" data-stage="frames">Frames</li>
+          <li class="stage" data-stage="cutout">Cut-out</li>
+          <li class="stage" data-stage="steady">Steady</li>
+          <li class="stage" data-stage="depth">Depth</li>
+          <li class="stage" data-stage="loop">Loop</li>
+        </ol>
+        <button id="process" type="button">Process</button>
+        <p class="status" id="status" role="status"></p>
+        <div id="stage-view"></div>
+        <div class="tools">
+          <button class="quiet" id="still" type="button" disabled>Save still</button>
+          <button class="quiet" id="record" type="button" disabled>Record clip</button>
+        </div>
+        <p class="note">The stage view shows your original video. Stills and recordings of it are for you, not for publishing.</p>
+      </div>
+    </section>
+
+    <section id="s-check" aria-disabled="true">
+      <h2>5 · Check</h2>
+      <div>
+        <label for="public">This is what anyone can download: depth only, no colour, no faces.</label>
+        <video id="public" muted loop playsinline autoplay></video>
+      </div>
+    </section>
+
+    <section id="s-export" aria-disabled="true">
+      <h2>6 · Export</h2>
+      <div>
+        <button id="export" type="button">Export memory</button>
+        <p class="note">Downloads the memory and an updated <code>memories.json</code>. Put both in <code>memory-projector/memories/</code> and commit them.</p>
+      </div>
+    </section>
+  </main>
+  <script type="module" src="./app.js"></script>
+</body>
+</html>
