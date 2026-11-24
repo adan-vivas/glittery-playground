@@ -7,7 +7,7 @@
 // (localStorage) and can be copied out as JSON to become the site's defaults.
 import * as THREE from 'three';
 
-const device = document.querySelector('temporal-projector');
+const device = document.querySelector('memory-projector, temporal-projector');   // the homepage's projector, current or archived
 const paper = () => window.__paper;
 const STORE = 'scene-lab:fixtures', CURRENT = 'scene-lab:current';
 const store = { get(k, d) { try { return JSON.parse(localStorage.getItem(k)) ?? d; } catch { return d; } }, set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} } };
