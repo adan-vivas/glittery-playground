@@ -298,6 +298,13 @@ Removed: `date`, `setDate`, `randomFuture`, `setContent`, `datechange`, the dial
 ## Left to the builder
 
 - Matting model choice (criteria above), inflation parameters, temporal smoothing, steadying filter.
+  - **Decided (2026-11-24):** BiRefNet-lite (MIT, onnx-community/BiRefNet_lite-ONNX) on WebGPU through onnxruntime-web
+    1.31.1, half precision where the GPU supports it; it keeps held objects. It needs WebGPU (at its fixed 1024 px input
+    it does not fit in WebAssembly's 4 GB) and a GPU allowing 11 storage buffers per shader (Macs do; SwiftShader does
+    not). Fallback: MODNet (Apache-2.0), portrait matting, runs anywhere, ~3.5 s/frame on CPU here; the engine page says
+    when it falls back and that held objects may be lost. On the reference frame both cut the boy out cleanly (body
+    alpha 0.93, floor 0.00) and neither picked up the mirror reflection. Rejected: @imgly/background-removal (AGPL),
+    Robust Video Matting (GPL-3.0), RMBG (non-commercial), MediaPipe (people only).
 - Dot grid resolution, dot size, the exact scanline/flicker/glitch shader, depth-derived shading.
 - Crawl area size and position, font size, exact speed (tuned by eye).
 - Key, light and lug dimensions and exact positions; strap material values.

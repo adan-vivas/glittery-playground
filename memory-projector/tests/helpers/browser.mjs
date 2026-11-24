@@ -21,6 +21,7 @@ const TYPES = { '.html': 'text/html', '.js': 'text/javascript', '.mjs': 'text/ja
 export const CDN_ROUTES = [
   ['https://cdn.jsdelivr.net/npm/three@0.170.0/', path.join(PKG, 'node_modules/three/')],
   ['https://cdn.jsdelivr.net/npm/mp4-muxer@5.2.2/', path.join(PKG, 'node_modules/mp4-muxer/')],
+  ['https://cdn.jsdelivr.net/npm/onnxruntime-web@1.31.1/', path.join(PKG, 'node_modules/onnxruntime-web/')],
 ];
 
 function sendFile(res, file, req) {
@@ -41,10 +42,20 @@ function sendFile(res, file, req) {
 }
 
 let server, origin;
+// Extra directories served under a URL prefix (for big local files, like a model, that must not travel through
+// Playwright's request interception). Set with mount() before opening pages.
+const MOUNTS = new Map();
+export function mount(prefix, dir) { MOUNTS.set(prefix, path.resolve(dir)); }
 async function serve() {
   if (server) return origin;
   server = http.createServer((req, res) => {
     let p = decodeURIComponent(new URL(req.url, 'http://x').pathname);
+    for (const [prefix, dir] of MOUNTS) {
+      if (!p.startsWith(prefix)) continue;
+      const file = path.join(dir, p.slice(prefix.length));
+      if (!file.startsWith(dir)) { res.writeHead(403); res.end(); return; }
+      return sendFile(res, file, req);
+    }
     if (p.endsWith('/')) p += 'index.html';
     const file = path.join(ROOT, p);
     if (!file.startsWith(ROOT)) { res.writeHead(403); res.end(); return; }
@@ -61,10 +72,11 @@ async function serve() {
  * errors collects page errors and console.error; warnings collects console.warn; network the browser's failed loads.
  */
 export async function openPage(pathname, { reducedMotion, storageState, viewport = { width: 1280, height: 860 },
-  routes = [], initScript, waitFor } = {}) {
+  routes = [], initScript, waitFor, webgpu = false } = {}) {
   const base = await serve();
   const browser = await chromium.launch({ args: ['--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader',
-    '--autoplay-policy=no-user-gesture-required', '--ignore-gpu-blocklist'] });
+    '--autoplay-policy=no-user-gesture-required', '--ignore-gpu-blocklist',
+    ...(webgpu ? ['--enable-unsafe-webgpu', '--use-webgpu-adapter=swiftshader'] : [])] });   // software WebGPU
   const context = await browser.newContext({ viewport, reducedMotion, storageState, acceptDownloads: true });
   const errors = [], warnings = [], network = [];   // network: the browser's own "Failed to load resource" lines
   for (const [prefix, dir] of CDN_ROUTES) {
