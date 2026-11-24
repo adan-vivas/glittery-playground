@@ -19,6 +19,7 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { createPlaylist } from './lib/playlist.js';
 import { DepthHologram } from './holo-depth.js';
 import { wrapLines, crawlState } from './lib/crawl.js';
+import { createSeen } from './lib/seen.js';
 
 const TOP_Y = 0.021;                // top surface height (m)
 const POWER_SLIDE = 0.0088;         // the power knob slides this far right when on
@@ -304,8 +305,9 @@ class MemoryProjector extends HTMLElement {
     this.canvas = this.shadowRoot.querySelector('canvas');
     this.live = this.shadowRoot.querySelector('.sr');
     this.clicker = new Clicker();
-    this.state = { power: true, index: 0, id: null };
+    this.state = { power: true, index: 0, id: null, developing: false };
     this.playlist = createPlaylist([]);
+    this.seen = createSeen();
   }
 
   // The memories, in story order: [{ id, src, story, title?, date?, fps, seconds, aspect }]. `src` is relative to
@@ -503,6 +505,8 @@ class MemoryProjector extends HTMLElement {
       return s;
     };
     this.ledGlow = sprite(0x3dff8a, 0.007, LED_P);
+    this.memoryGlow = sprite(0x5b7cff, 0.008, MEMORY_LED_P);   // the memory light: a new memory is developing
+    this.memoryGlow.material.opacity = 0;
     this.frontGlow = sprite(0xffc98a, 0.016, APERTURE_P);
 
     // the year, thrown onto the table by the front lens
@@ -531,7 +535,7 @@ class MemoryProjector extends HTMLElement {
     this.glitch = 0;
     this._drawProjection();
     this._applyLights(this.lightSpring.v);
-    if (this.state.power) this._onMemory(this.playlist.current, { first: false });
+    if (this.state.power) this._onMemory(this.playlist.current);
 
     this._bindInput();
     this._ro = new ResizeObserver(() => this._resize());
@@ -930,7 +934,7 @@ class MemoryProjector extends HTMLElement {
     const moved = id !== this.state.id || this.playlist.index !== this.state.index;
     this.state.index = this.playlist.index;
     this.state.id = id;
-    if (this.renderer && this.state.power && (moved || pressed)) this._onMemory(m, { first: false });
+    if (this.renderer && this.state.power && (moved || pressed)) this._onMemory(m);
     if (!moved && this._announced) return;
     this._announced = true;
     this._announce();
@@ -972,8 +976,8 @@ class MemoryProjector extends HTMLElement {
     this.powerSpring.t = on ? POWER_SLIDE : 0;
     this.projFade.t = on ? 1 : 0;
     this.holoSpring.t = on ? 1 : 0;
-    if (on) { this._crawlNext = this.playlist.current?.story || ''; this._onMemory(this.playlist.current, { first: false }); }
-    else this.depth?.show(null);                                       // off: the memory drains back into the lens
+    if (on) { this._crawlNext = this.playlist.current?.story || ''; this._onMemory(this.playlist.current); }
+    else { this.depth?.show(null); this.state.developing = false; }    // off: the memory drains back into the lens
     this.dispatchEvent(new CustomEvent('powerchange', { detail: { on }, bubbles: true, composed: true }));
     this._announce();
   }
@@ -1135,10 +1139,20 @@ class MemoryProjector extends HTMLElement {
   }
 
   // The hologram shows this memory (null: nothing). `first`: its first showing here, so it develops slowly.
-  _onMemory(memory, { first = false } = {}) {
+  // The first showing of a memory in this browser develops: it rises slowly out of the lens while the memory light
+  // pulses, and once it stands it counts as seen.
+  _onMemory(memory) {
     if (memory !== this._memory || !this._crawl) this._crawlNext = memory?.story || '';   // dissolve to the new story
     this._memory = memory;
-    this.depth?.show(memory?.url || null, { developing: first });
+    const url = memory?.url || null, first = !!url && !this.seen.has(memory.id);
+    this.state.developing = first;
+    const done = this.depth?.show(url, { developing: first });
+    if (first && done) done.then(() => {
+      const d = this.depth;
+      if (this._memory !== memory || d.shown?.url !== url || d.failed === url || !d.settled) return;   // superseded or failed
+      this.seen.mark(memory.id);
+      this.state.developing = false;
+    });
   }
 
   _tickHologram(dt, now) {
@@ -1189,6 +1203,11 @@ class MemoryProjector extends HTMLElement {
     this.M.front_core.emissiveIntensity = 2.4 * k;
     this.M.power_on.emissiveIntensity = 3 * k;
     this.ledGlow.material.opacity = 0.5 * k;
+    // the memory light pulses softly while a memory develops, then dims
+    const want = this.state.developing && this.state.power ? 0.75 + 0.15 * Math.sin(performance.now() / 1000 * 4) : 0;
+    this._memoryK = (this._memoryK ?? 0) + (want - (this._memoryK ?? 0)) * Math.min(1, (this._dtLight ?? 0.016) * 6);
+    this.M.memory_led.emissiveIntensity = 4 * this._memoryK;
+    this.memoryGlow.material.opacity = this._memoryK;
     this.frontGlow.material.opacity = 0.1 * k;
   }
 
@@ -1199,6 +1218,7 @@ class MemoryProjector extends HTMLElement {
     this.powerBtn.position.x = this.powerX + this.powerSpring.v;
     this.lightSpring.step(dt);
     this.projFade.step(dt);
+    this._dtLight = dt;
     this._applyLights(this.lightSpring.v);
     const flicker = this.state.power ? 1 - 0.025 * Math.random() : 1;
     // the crawl: a new story dissolves in (the old one fades out first), then it keeps moving
