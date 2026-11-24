@@ -1215,7 +1215,7 @@ class MemoryProjector extends HTMLElement {
     const imgPx = Math.abs(top.y - bottom.y) / 2 * this.clientHeight;
     const dist = this.camera.position.distanceTo(pts.getWorldPosition(this._ptsV ??= new THREE.Vector3()));
     this.depth.update(dt, t, { power: Math.min(1, k * 2.5), glitch: this.glitch, flicker,
-      size: THREE.MathUtils.clamp(imgPx / 110, 1, 3.2) * this.renderer.getPixelRatio() * dist });
+      size: THREE.MathUtils.clamp(imgPx / 125, 1, 2.8) * this.renderer.getPixelRatio() * dist });   // small, crisp dots
   }
 
   _announce() {

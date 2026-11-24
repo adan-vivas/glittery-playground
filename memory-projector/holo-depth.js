@@ -41,12 +41,14 @@ const VS = /* glsl */ `
     float e = uCell * 1.5;
     float dl = max(depthAt(uv - vec2(e, 0.)), 0.), dr = max(depthAt(uv + vec2(e, 0.)), 0.);
     float db = max(depthAt(uv - vec2(0., e)), 0.), dt = max(depthAt(uv + vec2(0., e)), 0.);
-    vec3 n = normalize(vec3((dl - dr) * 2.2, (db - dt) * 2.2, side));
-    vec3 L = normalize(vec3(-.55, .65, .55 * side));
+    // the surface's real slope: depth is uThick of the frame deep, sampled 2e apart
+    vec3 n = normalize(vec3((dl - dr) * uThick / (2. * e), (db - dt) * uThick / (2. * e), side));
+    vec3 L = normalize(vec3(-.5, .6, .62 * side));
     float key = max(dot(n, L), 0.);
-    float rim = pow(1. - abs(n.z), 2.);
-    vShade = .38 + .5 * key + .45 * rim;
-    vGlow = 1. - smoothstep(0., .3, d);          // thin parts and edges glow a little
+    float rim = pow(1. - abs(n.z), 3.);
+    // light picks out the relief; nearer parts are denser; the back is a faint ghost that gives volume when it turns
+    vShade = (.28 + 1.1 * pow(key, 1.5) + .4 * rim) * (.6 + .4 * d) * (side > 0. ? 1. : .22);
+    vGlow = (1. - smoothstep(0., .18, d)) * (side > 0. ? 1. : .3);   // the thin edge of the figure glows
 
     // a glitch: now and then a band of the figure slips sideways
     float band = floor(uv.y * 24. + floor(uTime * 7.));
@@ -76,7 +78,7 @@ const FS = /* glsl */ `
     float r = length(gl_PointCoord - .5);
     if (r > .5) discard;
     float scan = 1. - (.25 + .25 * uMotion) * smoothstep(.3, 1., sin((vY * 46. - uTime * 1.3) * 6.2832) * .5 + .5);   // bands drifting up
-    float a = clamp(vShade + vGlow * .35, 0., 1.2) * scan * (1. - r * 1.4) * vA * uAlpha;
+    float a = clamp(vShade + vGlow * .5, 0., 1.) * scan * (1. - r * 1.2) * vA * uAlpha;
     gl_FragColor = vec4(uInk, clamp(a, 0., 1.));
   }`;
 

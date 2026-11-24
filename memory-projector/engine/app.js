@@ -10,7 +10,11 @@ import { wordCount, slugify, validateEntry, upsertMemory } from './manifest.js';
 import { FPS, MAX_SECONDS } from '../lib/depth-format.js';
 
 const $ = (id) => document.getElementById(id);
-const FAKE = new URLSearchParams(location.search).get('matter') === 'fake';   // tests: magenta is foreground
+const params = new URLSearchParams(location.search);
+const FAKE = params.get('matter') === 'fake';   // tests: magenta is foreground
+// ?models=/some/folder/ loads the models from there (birefnet/, modnet/, depth/ inside it) instead of Hugging Face
+const MODEL_BASE = params.get('models');
+const MODEL_URLS = MODEL_BASE && { birefnet: MODEL_BASE + 'birefnet/', modnet: MODEL_BASE + 'modnet/', depth: MODEL_BASE + 'depth/' };
 const state = { file: null, duration: 0, start: 0, pick: null, keep: new Set(), result: null, blob: null, idEdited: false };
 const view = createStageView($('stage-view'));
 let matterP = null, depthP = null;
@@ -18,7 +22,7 @@ let matterP = null, depthP = null;
 // The depth model: real shape for the figures. Tests (?matter=fake) use the simple balloon instead.
 function depthModel() {
   if (FAKE) return Promise.resolve(null);
-  depthP ??= createDepthModel({ onProgress: (p) => { if (p.total) status(`Downloading the depth model, once: ${Math.round(p.loaded / p.total * 100)} %`); } })
+  depthP ??= createDepthModel({ ...(MODEL_URLS && { base: MODEL_URLS.depth }), onProgress: (p) => { if (p.total) status(`Downloading the depth model, once: ${Math.round(p.loaded / p.total * 100)} %`); } })
     .catch((e) => { console.warn(e); status(`The depth model couldn\u2019t load (${e.message}); using the simple balloon shape.`); return null; });
   return depthP;
 }
@@ -35,7 +39,7 @@ const download = (blob, name) => {
 
 function matter() {
   if (!matterP) {
-    matterP = FAKE ? Promise.resolve(createFakeMatter()) : createMatter({
+    matterP = FAKE ? Promise.resolve(createFakeMatter()) : createMatter({ ...(MODEL_URLS && { models: MODEL_URLS }),
       onProgress: (p) => { if (p.total) $('matter-note').textContent = `Downloading the ${p.model} model, once: ${Math.round(p.loaded / p.total * 100)} %`; },
     });
     matterP.then((m) => {
