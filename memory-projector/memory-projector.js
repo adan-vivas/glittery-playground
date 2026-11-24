@@ -17,6 +17,7 @@ import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { createPlaylist } from './lib/playlist.js';
+import { DepthHologram } from './holo-depth.js';
 
 const TOP_Y = 0.021;                // top surface height (m)
 const POWER_SLIDE = 0.0088;         // the power knob slides this far right when on
@@ -908,20 +909,21 @@ class MemoryProjector extends HTMLElement {
   }
 
   // ---------------------------------------------------------------- public API
-  next() { this.playlist.next(); this._changed(); }
-  back() { this.playlist.back(); this._changed(); }
-  shuffle() { this.playlist.shuffle(); this._changed(); }
-  show(id) { if (this.playlist.show(id)) this._changed(); }
+  next() { this.playlist.next(); this._changed(true); }
+  back() { this.playlist.back(); this._changed(true); }
+  shuffle() { this.playlist.shuffle(); this._changed(true); }
+  show(id) { if (this.playlist.show(id)) this._changed(true); }
 
-  // The current memory changed (or the list did): tell the page, and the hologram if it is on.
-  _changed() {
+  // The current memory changed (or the list did, or a key was pressed): tell the hologram if it is on, and the page if
+  // the memory is a different one. A press that lands on the same memory still re-shows it (it retries playback).
+  _changed(pressed = false) {
     const m = this.playlist.current, id = m ? m.id : null;
     const moved = id !== this.state.id || this.playlist.index !== this.state.index;
     this.state.index = this.playlist.index;
     this.state.id = id;
+    if (this.renderer && this.state.power && (moved || pressed)) this._onMemory(m, { first: false });
     if (!moved && this._announced) return;
     this._announced = true;
-    if (this.renderer && this.state.power) this._onMemory(m, { first: false });
     this._announce();
     this.dispatchEvent(new CustomEvent('memorychange', {
       detail: { id, index: this.state.index, title: m?.title || '', story: m?.story || '' }, bubbles: true, composed: true }));
@@ -962,6 +964,7 @@ class MemoryProjector extends HTMLElement {
     this.projFade.t = on ? 1 : 0;
     this.holoSpring.t = on ? 1 : 0;
     if (on) this._onMemory(this.playlist.current, { first: false });
+    else this.depth?.show(null);                                       // off: the memory drains back into the lens
     this.dispatchEvent(new CustomEvent('powerchange', { detail: { on }, bubbles: true, composed: true }));
     this._announce();
   }
@@ -1067,12 +1070,17 @@ class MemoryProjector extends HTMLElement {
     frame.position.y = HOLO.gap + HOLO.h / 2;
     group.add(frame);
 
+    // the memory itself
+    const depth = this.depth = new DepthHologram({ frame: HOLO, ink: HOLO_INK, reduceMotion });
+    group.add(depth.object3d);
+
     this.holo = { group, beam, motes, frame };
   }
 
   // The hologram shows this memory (null: nothing). `first`: its first showing here, so it develops slowly.
   _onMemory(memory, { first = false } = {}) {
     this._memory = memory;
+    this.depth?.show(memory?.url || null, { developing: first });
   }
 
   _tickHologram(dt, now) {
@@ -1096,7 +1104,18 @@ class MemoryProjector extends HTMLElement {
     mu.uSize.value = 2.2 * this.renderer.getPixelRatio();
     h.group.visible = k > 0.001;
     this.lensGlow.material.opacity = 0.85 * grow;
-    this._holoK = k; this._flicker = flicker;
+
+    // the memory: it turns to you around its vertical axis and leans a little toward your eye
+    const pts = this.depth.object3d;
+    const eye = h.group.worldToLocal((this._eyeV ??= new THREE.Vector3()).copy(this.camera.position));
+    pts.rotation.y = Math.atan2(eye.x, eye.z);
+    pts.rotation.x = -Math.atan2(eye.y - (HOLO.gap + HOLO.h / 2), Math.hypot(eye.x, eye.z)) * 0.2;
+    const top = this.rig.localToWorld((this._topV ??= new THREE.Vector3()).copy(HOLO.lens).setY(HOLO.lens.y + HOLO.top)).project(this.camera);
+    const bottom = this.rig.localToWorld((this._botV ??= new THREE.Vector3()).copy(HOLO.lens).setY(HOLO.lens.y + HOLO.gap)).project(this.camera);
+    const imgPx = Math.abs(top.y - bottom.y) / 2 * this.clientHeight;
+    const dist = this.camera.position.distanceTo(pts.getWorldPosition(this._ptsV ??= new THREE.Vector3()));
+    this.depth.update(dt, t, { power: Math.min(1, k * 2.5), glitch: this.glitch, flicker,
+      size: THREE.MathUtils.clamp(imgPx / 110, 1, 3.2) * this.renderer.getPixelRatio() * dist });
   }
 
   _announce() {

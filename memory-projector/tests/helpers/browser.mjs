@@ -93,16 +93,49 @@ export async function openPage(pathname, { reducedMotion, storageState, viewport
   return { page, context, browser, origin: base, errors, warnings, network, close: () => browser.close() };
 }
 
-/** Counts "ink blue" pixels (b > r + 40 and b > g + 20) in a PNG screenshot buffer, inside rect {x, y, w, h}. */
-export async function countInk(page, rect) {
-  const png = await page.screenshot({ clip: rect });
-  return page.evaluate(async (b64) => {
+/**
+ * Counts dense patches of hologram ink inside rect {x, y, width, height} (clamped to the viewport): the screenshot is cut
+ * into `cell`-px squares, and a square counts when its mean "blueness" (blue minus red) is above `min`. A figure made of
+ * many dots reads as dense patches; the pale beam and the sparse motes rising through it do not.
+ */
+/** rect clipped to the viewport, in whole pixels. */
+export function clampToViewport(page, rect) {
+  const vp = page.viewportSize();
+  const x = Math.max(0, Math.floor(rect.x)), y = Math.max(0, Math.floor(rect.y));
+  return { x, y, width: Math.min(vp.width, Math.ceil(rect.x + rect.width)) - x, height: Math.min(vp.height, Math.ceil(rect.y + rect.height)) - y };
+}
+
+export async function inkCells(page, rect, { cell = 6, min = 60 } = {}) {
+  const clip = clampToViewport(page, rect);
+  if (clip.width < cell || clip.height < cell) return 0;
+  const png = await page.screenshot({ clip });
+  return page.evaluate(async ({ b64, cell, min }) => {
     const img = await createImageBitmap(await (await fetch('data:image/png;base64,' + b64)).blob());
     const c = new OffscreenCanvas(img.width, img.height), g = c.getContext('2d');
     g.drawImage(img, 0, 0);
-    const d = g.getImageData(0, 0, img.width, img.height).data;
+    const { data: d, width: W, height: H } = g.getImageData(0, 0, img.width, img.height);
     let n = 0;
-    for (let i = 0; i < d.length; i += 4) if (d[i + 2] > d[i] + 40 && d[i + 2] > d[i + 1] + 20) n++;
+    for (let cy = 0; cy + cell <= H; cy += cell) for (let cx = 0; cx + cell <= W; cx += cell) {
+      let s = 0;
+      for (let yy = cy; yy < cy + cell; yy++) for (let xx = cx; xx < cx + cell; xx++) { const i = (yy * W + xx) * 4; s += d[i + 2] - d[i]; }
+      if (s / (cell * cell) > min) n++;
+    }
     return n;
-  }, png.toString('base64'));
+  }, { b64: png.toString('base64'), cell, min });
+}
+
+/** How many pixels differ by more than `tol` (any channel) between two same-size PNG screenshots. */
+export async function pixelDiff(page, a, b, tol = 8) {
+  return page.evaluate(async ({ a, b, tol }) => {
+    const read = async (b64) => {
+      const img = await createImageBitmap(await (await fetch('data:image/png;base64,' + b64)).blob());
+      const c = new OffscreenCanvas(img.width, img.height), g = c.getContext('2d'); g.drawImage(img, 0, 0);
+      return g.getImageData(0, 0, img.width, img.height).data;
+    };
+    const [x, y] = await Promise.all([read(a), read(b)]);
+    let n = 0;
+    for (let i = 0; i < x.length; i += 4)
+      if (Math.abs(x[i] - y[i]) > tol || Math.abs(x[i + 1] - y[i + 1]) > tol || Math.abs(x[i + 2] - y[i + 2]) > tol) n++;
+    return n;
+  }, { a: a.toString('base64'), b: b.toString('base64'), tol });
 }
