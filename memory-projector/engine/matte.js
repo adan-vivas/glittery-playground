@@ -77,7 +77,8 @@ async function birefnet(ort, adapter, base, onProgress) {
   const half = adapter.features.has('shader-f16');
   const bytes = await fetchModel(base + (half ? 'model_fp16.onnx' : 'model.onnx'), onProgress, 'BiRefNet-lite');
   const session = await ort.InferenceSession.create(bytes, { executionProviders: ['webgpu'] });
-  const segment = segmenter(ort, session, { inW: 1024, inH: 1024, mean: [0.485, 0.456, 0.406], std: [0.229, 0.224, 0.225], half, logits: true });
+  // the half-precision file keeps full-precision input and output (only its weights are halved): always feed float32
+  const segment = segmenter(ort, session, { inW: 1024, inH: 1024, mean: [0.485, 0.456, 0.406], std: [0.229, 0.224, 0.225], half: false, logits: true });
   // a first run on a blank frame: a GPU that cannot run the model fails here, not halfway through a clip
   const blank = new OffscreenCanvas(64, 64); blank.getContext('2d').fillRect(0, 0, 64, 64);
   await segment(blank);
