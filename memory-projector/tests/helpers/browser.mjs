@@ -21,7 +21,7 @@ const TYPES = { '.html': 'text/html', '.js': 'text/javascript', '.mjs': 'text/ja
 export const CDN_ROUTES = [
   ['https://cdn.jsdelivr.net/npm/three@0.170.0/', path.join(PKG, 'node_modules/three/')],
   ['https://cdn.jsdelivr.net/npm/mp4-muxer@5.2.2/', path.join(PKG, 'node_modules/mp4-muxer/')],
-  ['https://cdn.jsdelivr.net/npm/onnxruntime-web@1.31.1/', path.join(PKG, 'node_modules/onnxruntime-web/')],
+  ['https://cdn.jsdelivr.net/npm/onnxruntime-web@1.20.1/', path.join(PKG, 'node_modules/onnxruntime-web/')],
 ];
 
 function sendFile(res, file, req) {
