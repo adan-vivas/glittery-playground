@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Memory Projector</title>
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+        "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"
+      }
+    }
+  </script>
+  <script type="module" src="./memory-projector.js"></script>
+  <style>
+    :root { --bg: #e4e4e2; --ink: #1a1a1a; --mute: rgba(26,26,26,.48); }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; background: var(--bg); color: var(--ink);
+      font-family: "Helvetica Neue", Helvetica, Arial, sans-serif; -webkit-font-smoothing: antialiased; }
+    main { min-height: 100svh; display: grid; grid-template-rows: 1fr auto; }
+    memory-projector { width: 100%; height: calc(100svh - 92px); min-height: 420px; }
+  </style>
+</head>
+<body>
+  <main>
+    <memory-projector memories="./demo/memories.json" power="off"></memory-projector>
+  </main>
+</body>
+</html>

@@ -57,8 +57,8 @@ async function serve() {
 }
 
 /**
- * Opens `pathname` (from the repo root). Returns { page, context, browser, origin, errors, warnings, close }.
- * errors collects page errors and console.error; warnings collects console.warn.
+ * Opens `pathname` (from the repo root). Returns { page, context, browser, origin, errors, warnings, network, close }.
+ * errors collects page errors and console.error; warnings collects console.warn; network the browser's failed loads.
  */
 export async function openPage(pathname, { reducedMotion, storageState, viewport = { width: 1280, height: 860 },
   routes = [], initScript, waitFor } = {}) {
@@ -66,7 +66,7 @@ export async function openPage(pathname, { reducedMotion, storageState, viewport
   const browser = await chromium.launch({ args: ['--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader',
     '--autoplay-policy=no-user-gesture-required', '--ignore-gpu-blocklist'] });
   const context = await browser.newContext({ viewport, reducedMotion, storageState, acceptDownloads: true });
-  const errors = [], warnings = [];
+  const errors = [], warnings = [], network = [];   // network: the browser's own "Failed to load resource" lines
   for (const [prefix, dir] of CDN_ROUTES) {
     await context.route(prefix + '**', (route) => {
       const rel = route.request().url().slice(prefix.length).split('?')[0];
@@ -80,7 +80,7 @@ export async function openPage(pathname, { reducedMotion, storageState, viewport
   const page = await context.newPage();
   page.on('pageerror', (e) => errors.push(String(e && e.stack || e)));
   page.on('console', (m) => {
-    if (m.type() === 'error') errors.push(m.text());
+    if (m.type() === 'error') (/^Failed to load resource/.test(m.text()) ? network : errors).push(m.text());
     if (m.type() === 'warning') warnings.push(m.text());
   });
   try {
@@ -90,7 +90,7 @@ export async function openPage(pathname, { reducedMotion, storageState, viewport
     await browser.close();
     throw new Error(`${e.message}\npage errors: ${errors.join('\n')}`);
   }
-  return { page, context, browser, origin: base, errors, warnings, close: () => browser.close() };
+  return { page, context, browser, origin: base, errors, warnings, network, close: () => browser.close() };
 }
 
 /** Counts "ink blue" pixels (b > r + 40 and b > g + 20) in a PNG screenshot buffer, inside rect {x, y, w, h}. */
