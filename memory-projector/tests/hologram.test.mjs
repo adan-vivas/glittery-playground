@@ -85,9 +85,11 @@ test('a missing memory video warns once and shows nothing', async () => {
   const t = await openPage('/memory-projector/index.html', { waitFor: READY, routes: manifest([entry('gone', 'gone.mp4')]) });
   try {
     await powerOn(t.page);
-    await t.page.waitForTimeout(2500);
+    const gone = () => t.warnings.filter((w) => /gone\.mp4/.test(w)).length;
+    for (let i = 0; i < 40 && !gone(); i++) await t.page.waitForTimeout(200);   // the video's error arrives when it arrives
+    await t.page.waitForTimeout(1000);                                        // and only once after that
     assert.deepEqual(t.errors, []);
-    assert.equal(t.warnings.filter((w) => /gone\.mp4/.test(w)).length, 1, t.warnings.join('\n'));
+    assert.equal(gone(), 1, t.warnings.join('\n'));
     const n = await inkCells(t.page, await figureRect(t.page));
     assert.ok(n < NONE, `${n} figure ink cells without a video`);
   } finally { await t.close(); }
