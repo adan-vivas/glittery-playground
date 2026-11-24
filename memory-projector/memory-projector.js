@@ -387,8 +387,8 @@ class MemoryProjector extends HTMLElement {
     const controls = this.controls = new OrbitControls(camera, this.canvas);
     controls.enabled = !this.table;
     // framed for the device, the table projection and the hologram above the lens
-    controls.target.set(-0.004, 0.056, 0.006);
-    camera.position.set(-0.215, 0.255, 0.40);
+    controls.target.set(0.0, 0.08, 0.06);   // between the story on the table and the top of the memory
+    camera.position.set(-0.13, 0.27, 0.46);
     controls.enableDamping = true;
     controls.dampingFactor = 0.07;
     controls.enablePan = false;
@@ -559,7 +559,7 @@ class MemoryProjector extends HTMLElement {
     if (this.table) return this._frameTable(w, h);
     // keep the whole device, projection and hologram in frame at any aspect ratio
     // (the scene is taller than it is wide, so tall screens fit to its width and wide screens to its height)
-    const rv = 0.1, rh = 0.076, vfov = THREE.MathUtils.degToRad(this.camera.fov);
+    const rv = 0.135, rh = 0.125, vfov = THREE.MathUtils.degToRad(this.camera.fov);
     const hfov = 2 * Math.atan(Math.tan(vfov / 2) * this.camera.aspect);
     const dist = Math.max(rv / Math.sin(vfov / 2), rh / Math.sin(hfov / 2));
     const dir = this.camera.position.clone().sub(this.controls.target).normalize();

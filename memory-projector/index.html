@@ -4,6 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Memory Projector</title>
+  <meta name="description" content="A personal holographic projector of memories: switch it on, step through the moments, read the story on the table.">
   <script type="importmap">
     {
       "imports": {
@@ -14,17 +15,51 @@
   </script>
   <script type="module" src="./memory-projector.js"></script>
   <style>
-    :root { --bg: #e4e4e2; --ink: #1a1a1a; --mute: rgba(26,26,26,.48); }
+    :root { --bg: #e4e4e2; --ink: #1a1a1a; --mute: rgba(26,26,26,.48); --beam: rgb(28, 46, 255); }
     * { box-sizing: border-box; }
     html, body { margin: 0; background: var(--bg); color: var(--ink);
       font-family: "Helvetica Neue", Helvetica, Arial, sans-serif; -webkit-font-smoothing: antialiased; }
     main { min-height: 100svh; display: grid; grid-template-rows: 1fr auto; }
-    memory-projector { width: 100%; height: calc(100svh - 92px); min-height: 420px; }
+    memory-projector { width: 100%; height: calc(100svh - 92px); min-height: 420px; font-family: inherit; }
+    footer { display: flex; justify-content: space-between; align-items: end; gap: 24px;
+      padding: 0 32px 28px; font-size: 11px; letter-spacing: .12em; text-transform: uppercase; }
+    ol { display: flex; gap: 28px; list-style: none; margin: 0; padding: 0; color: var(--mute); }
+    ol li span { color: var(--ink); margin-right: 8px; font-variant-numeric: tabular-nums; }
+    kbd { font: inherit; }
+    .readout { text-align: right; color: var(--mute); min-width: 0; }
+    .readout b { display: block; font-weight: 400; font-size: 22px; letter-spacing: .01em; line-height: 1.2;
+      color: var(--ink); margin-top: 6px; text-transform: none; text-wrap: balance; }
+    .readout b.on { color: var(--beam); }
+    @media (max-width: 640px) {
+      memory-projector { height: calc(100svh - 190px); min-height: 360px; }
+      footer { flex-direction: column; align-items: start; padding: 0 16px 20px; }
+      ol { flex-direction: column; gap: 8px; }
+      .readout { text-align: left; }
+    }
   </style>
 </head>
 <body>
   <main>
     <memory-projector memories="./demo/memories.json" power="off"></memory-projector>
+    <footer>
+      <ol>
+        <li><span>01</span>Slide the switch, or <kbd>P</kbd>, for power</li>
+        <li><span>02</span>Arrows step back and forward</li>
+        <li><span>03</span>The orange key shuffles</li>
+      </ol>
+      <div class="readout" aria-hidden="true">Memory <b id="readout">Off</b></div>
+    </footer>
   </main>
+  <script>
+    const out = document.getElementById('readout');
+    const el = document.querySelector('memory-projector');
+    let title = '';
+    const show = () => {
+      out.textContent = el.state && el.state.power ? (title || 'Untitled') : 'Off';
+      out.classList.toggle('on', !!(el.state && el.state.power));
+    };
+    el.addEventListener('memorychange', (e) => { title = e.detail.title; show(); });
+    el.addEventListener('powerchange', show);
+  </script>
 </body>
 </html>
