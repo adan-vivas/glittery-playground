@@ -1,0 +1,17 @@
+node_modules/
+# Original videos never belong in the repo (they are private). Only depth-only memory files and the synthetic demo.
+*.mov
+*.MOV
+*.m4v
+*.M4V
+*.hevc
+*.heic
+*.HEIC
+*.avi
+*.mkv
+*.webm
+*.mp4
+*.MP4
+!memories/*.mp4
+!demo/*.mp4
+!tests/fixtures/*.mp4

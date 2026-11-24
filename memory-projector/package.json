@@ -1,0 +1,13 @@
+{
+  "name": "memory-projector",
+  "private": true,
+  "type": "module",
+  "description": "Dev-only: tests for the <memory-projector> component and its engine. The pages themselves load their dependencies from a CDN.",
+  "scripts": {
+    "test": "node --test --test-concurrency=1 \"tests/**/*.test.mjs\""
+  },
+  "devDependencies": {
+    "mp4-muxer": "5.2.2",
+    "three": "0.170.0"
+  }
+}

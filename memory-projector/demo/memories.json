@@ -1,0 +1,11 @@
+[
+  {
+    "id": "demo-dance",
+    "src": "demo-dance.mp4",
+    "story": "This is a demo memory. The figure is synthetic: a few spheres and capsules dancing next to a bouncing ball, rendered straight into a depth video so the projector has something to show before real memories arrive. Real memories come from the engine page, which turns a short clip into depth alone, so the faces in it never leave the machine they were filmed on.",
+    "title": "A demo dance",
+    "fps": 12,
+    "seconds": 7,
+    "aspect": 1
+  }
+]
