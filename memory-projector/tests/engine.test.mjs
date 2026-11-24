@@ -59,6 +59,20 @@ test('the engine turns a shaky clip into a steady, depth-only memory', { timeout
     assert.ok(entry); assert.deepEqual(validateEntry(entry), []);
     assert.equal(entry.story, 'A magenta figure dances in a shaky hallway while its reflection watches.');
 
+    // a memories.json that exists but can't be read: export refuses rather than write a list holding only this memory
+    const before = downloads.length;
+    await t.context.route('**/memory-projector/memories/memories.json', (r) => r.fulfill({ body: '{ not json', contentType: 'application/json' }));
+    await page.click('#export');
+    await page.waitForTimeout(1500);
+    assert.equal(downloads.length, before, 'exported over an unreadable list');
+    assert.match(await page.textContent('#status'), /couldn.t read/i);
+    // no list yet (404): fine, it starts one, and says so
+    await t.context.route('**/memory-projector/memories/memories.json', (r) => r.fulfill({ status: 404, body: '' }));
+    await page.click('#export');
+    for (let i = 0; i < 30 && downloads.length < before + 2; i++) await page.waitForTimeout(100);
+    assert.equal(downloads.length, before + 2);
+    assert.match(await page.textContent('#status'), /first memory/i);
+
     // the published file: one figure (the reflection is gone), standing still despite the shaky camera
     const r = await page.evaluate(async (b64) => {
       const { labelFigures } = await import('/memory-projector/engine/figures.js');

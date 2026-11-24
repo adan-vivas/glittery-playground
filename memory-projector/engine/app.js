@@ -178,13 +178,25 @@ $('export').addEventListener('click', async () => {
     fps: FPS, seconds: +(state.result.depth.length / FPS).toFixed(2), aspect: 1 };
   const errs = validateEntry(entry);
   if (errs.length) { status(`Can't export yet: ${errs.join('; ')}.`); return; }
-  let list = [];
+  // The current list: the export adds to it. Only "there is no list yet" (404) starts a new one; anything else stops
+  // here, because a list holding only this memory would replace the others when committed.
+  let list, first = false;
   try {
     const res = await fetch('../memories/memories.json', { cache: 'no-store' });
-    if (res.ok) list = await res.json();
-  } catch { /* no list yet: start one */ }
-  list = upsertMemory(Array.isArray(list) ? list : [], entry);
+    if (res.status === 404) { list = []; first = true; }
+    else if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    else {
+      list = await res.json();
+      if (!Array.isArray(list)) throw new Error('it is not a list');
+    }
+  } catch (e) {
+    status(`Couldn’t read the current memory-projector/memories/memories.json (${e.message}), so nothing was exported: ` +
+      'the new list would hold only this memory and replace the others. Fix that file, or open this page from the repository, and export again.');
+    return;
+  }
+  list = upsertMemory(list, entry);
   download(state.blob, `${id}.mp4`);
   setTimeout(() => download(new Blob([JSON.stringify(list, null, 2) + '\n'], { type: 'application/json' }), 'memories.json'), 300);
-  status(`Exported ${id}.mp4 and memories.json. Put both in memory-projector/memories/ and commit them.`);
+  status(`Exported ${id}.mp4 and memories.json${first ? ' (your first memory: a new list)' : ` (${list.length} memories)`}. ` +
+    'Put both in memory-projector/memories/ and commit them.');
 });

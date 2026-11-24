@@ -61,3 +61,19 @@ test('a missing manifest leaves a working, empty projector', async () => {
     assert.equal(t.warnings.filter((w) => /memories/i.test(w)).length, 1, t.warnings.join('\n'));
   } finally { await t.close(); }
 });
+
+test('taking the projector off the page stops its video', async () => {
+  const t = await openPage('/memory-projector/index.html', { waitFor: READY });
+  try {
+    await t.page.evaluate(() => document.querySelector('memory-projector').togglePower());
+    await t.page.waitForFunction(() => !document.querySelector('memory-projector').depth.video.paused, null, { timeout: 15000 });
+    const r = await t.page.evaluate(async () => {
+      const el = document.querySelector('memory-projector'), v = el.depth.video;
+      el.remove();
+      await new Promise((ok) => setTimeout(ok, 300));
+      return { paused: v.paused, src: v.getAttribute('src') };
+    });
+    assert.equal(r.paused, true); assert.equal(r.src, null);
+    assert.deepEqual(t.errors, []);
+  } finally { await t.close(); }
+});

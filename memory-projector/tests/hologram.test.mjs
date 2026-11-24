@@ -92,6 +92,15 @@ test('a missing memory video warns once and shows nothing', async () => {
     assert.equal(gone(), 1, t.warnings.join('\n'));
     const n = await inkCells(t.page, await figureRect(t.page));
     assert.ok(n < NONE, `${n} figure ink cells without a video`);
+    await t.page.waitForTimeout(800);
+    const after = await t.page.evaluate(() => {
+      const el = document.querySelector('memory-projector'), c = el._crawlCanvas, d = c.getContext('2d').getImageData(0, 0, c.width, c.height).data;
+      let ink = 0; for (let i = 3; i < d.length; i += 4) ink += d[i];
+      return { developing: el.state.developing, glow: el.memoryGlow.material.opacity, ink };
+    });
+    assert.equal(after.developing, false, 'the memory light still says a memory is developing');
+    assert.ok(after.glow < 0.1, `memory light at ${after.glow}`);
+    assert.equal(after.ink, 0, 'the story of a broken memory is on the table');
   } finally { await t.close(); }
 });
 

@@ -43,3 +43,35 @@ export function keepMask(alpha, labels, keep) {
   for (let i = 0; i < alpha.length; i++) if (labels[i] && keep.has(labels[i])) out[i] = alpha[i];
   return out;
 }
+
+/**
+ * Pixels within `reach` px (chamfer distance) of a kept pixel: where a kept figure could have moved to by the next frame.
+ * Unlike a plain distance transform, the frame's border is not "near" anything.
+ */
+export function nearKept(kept, w, h, reach) {
+  const INF = 1e9, D = new Float32Array(w * h);
+  for (let i = 0; i < w * h; i++) D[i] = kept[i] > 0.5 ? 0 : INF;
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    const i = y * w + x; let d = D[i]; if (!d) continue;
+    if (x > 0) d = Math.min(d, D[i - 1] + 1);
+    if (y > 0) { d = Math.min(d, D[i - w] + 1); if (x > 0) d = Math.min(d, D[i - w - 1] + 1.414); if (x < w - 1) d = Math.min(d, D[i - w + 1] + 1.414); }
+    D[i] = d;
+  }
+  for (let y = h - 1; y >= 0; y--) for (let x = w - 1; x >= 0; x--) {
+    const i = y * w + x; let d = D[i]; if (!d) continue;
+    if (x < w - 1) d = Math.min(d, D[i + 1] + 1);
+    if (y < h - 1) { d = Math.min(d, D[i + w] + 1); if (x < w - 1) d = Math.min(d, D[i + w + 1] + 1.414); if (x > 0) d = Math.min(d, D[i + w - 1] + 1.414); }
+    D[i] = d;
+  }
+  const out = new Uint8Array(w * h);
+  for (let i = 0; i < w * h; i++) out[i] = D[i] <= reach ? 1 : 0;
+  return out;
+}
+
+/** The figures of `cur` to keep: those with ≥ 20 % of their pixels near (see nearKept) the last kept pixels. */
+export function trackNear(near, cur) {
+  const hits = new Map(), keep = new Set();
+  for (let i = 0; i < cur.labels.length; i++) { const id = cur.labels[i]; if (id && near[i]) hits.set(id, (hits.get(id) || 0) + 1); }
+  for (const f of cur.figures) if ((hits.get(f.id) || 0) >= 0.2 * f.area) keep.add(f.id);
+  return keep;
+}

@@ -349,6 +349,7 @@ class MemoryProjector extends HTMLElement {
 
   disconnectedCallback() {
     cancelAnimationFrame(this._raf);
+    if (this.depth) { this.depth.video.pause(); this.depth._load(null); }   // stop decoding the memory's video
     this._ro?.disconnect();
     this._io?.disconnect();
     this.renderer?.dispose();
@@ -1147,9 +1148,15 @@ class MemoryProjector extends HTMLElement {
     const url = memory?.url || null, first = !!url && !this.seen.has(memory.id);
     this.state.developing = first;
     const done = this.depth?.show(url, { developing: first });
-    if (first && done) done.then(() => {
+    if (url && done) done.then(() => {
       const d = this.depth;
-      if (this._memory !== memory || d.shown?.url !== url || d.failed === url || !d.settled) return;   // superseded or failed
+      if (this._memory !== memory || d.shown?.url !== url) return;                 // superseded
+      if (d.failed === url) {                                                       // its video won't load: beam and mist only
+        this.state.developing = false;
+        this._crawlNext = '';
+        return;
+      }
+      if (!first || !d.settled) return;
       this.seen.mark(memory.id);
       this.state.developing = false;
     });
