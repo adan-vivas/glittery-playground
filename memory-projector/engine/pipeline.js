@@ -26,7 +26,35 @@ function warp(mask, W, H, T) {
  * firstAlpha, or of the first frame's cut-out). onStage(name, i, n, data) after each step of each frame.
  * → { depth: Float32Array[] (SIZE²), encoded: Uint8ClampedArray[], masks, transforms }
  */
-// Real depth, from a depth model (bigger = nearer), turned into 0..1 inside the kept figures: the 5th to 95th percentile
+// Detail boost for depth, like sharpening a picture: each pixel moves away from the average of its neighbourhood (inside
+// the figure only), so small bumps (a fist, a snout's ridge) stand out from the larger shape. Depth stays in 0..1.
+const RELIEF_RADIUS = 6, RELIEF_GAIN = 2.2;
+export function boostRelief(d, S, r, gain) {
+  const sum = new Float32Array(d.length), cnt = new Float32Array(d.length), tmpS = new Float32Array(d.length), tmpC = new Float32Array(d.length);
+  for (let y = 0; y < S; y++) {                     // box blur of the figure's own values, rows then columns
+    let s = 0, c = 0;
+    for (let x = -r; x < S; x++) {
+      const add = x + r, sub = x - r - 1;
+      if (add < S) { const v = d[y * S + add]; if (v > 0) { s += v; c++; } }
+      if (sub >= 0) { const v = d[y * S + sub]; if (v > 0) { s -= v; c--; } }
+      if (x >= 0) { tmpS[y * S + x] = s; tmpC[y * S + x] = c; }
+    }
+  }
+  for (let x = 0; x < S; x++) {
+    let s = 0, c = 0;
+    for (let y = -r; y < S; y++) {
+      const add = y + r, sub = y - r - 1;
+      if (add < S) { s += tmpS[add * S + x]; c += tmpC[add * S + x]; }
+      if (sub >= 0) { s -= tmpS[sub * S + x]; c -= tmpC[sub * S + x]; }
+      if (y >= 0) { sum[y * S + x] = s; cnt[y * S + x] = c; }
+    }
+  }
+  const out = new Float32Array(d.length);
+  for (let p = 0; p < d.length; p++) if (d[p] > 0) out[p] = Math.min(1, Math.max(0.02, d[p] + gain * (d[p] - sum[p] / Math.max(1, cnt[p]))));
+  return out;
+}
+
+// Real depth, from a depth model (bigger = nearer), turned into 0..1 inside the kept figures: the 3rd to 99.5th percentile
 // of the figures' own values, eased over time so the figure doesn't pump as it moves. → Float32Array, 0 outside.
 function figureDepth(raw, mask, ease) {
   const vals = [];
@@ -34,7 +62,8 @@ function figureDepth(raw, mask, ease) {
   const out = new Float32Array(mask.length);
   if (!vals.length) return out;
   vals.sort((a, b) => a - b);
-  let lo = vals[Math.floor(vals.length * 0.05)], hi = vals[Math.floor(vals.length * 0.95)];
+  // the nearest few per cent are often the detail (a fist, a snout): don't clip them flat
+  let lo = vals[Math.floor(vals.length * 0.03)], hi = vals[Math.min(vals.length - 1, Math.floor(vals.length * 0.995))];
   if (ease.lo != null) { lo = ease.lo + 0.35 * (lo - ease.lo); hi = ease.hi + 0.35 * (hi - ease.hi); }
   ease.lo = lo; ease.hi = hi;
   const span = Math.max(1e-6, hi - lo);
@@ -78,8 +107,10 @@ export async function runPipeline({ frames, matter, keep, firstAlpha, minArea, d
     let d = inflate(warped, SIZE, SIZE, { heightPx, cut: !!measures[i]?.cut });   // the balloon: thin at the edges
     if (depthModel) {
       const shape = warp(real[i], W, H, T[i]);
-      for (let p = 0; p < d.length; p++) if (d[p] > 0) d[p] = 0.12 + 0.88 * (0.7 * shape[p] / Math.max(warped[p], 1e-3) + 0.3 * d[p]);
-      for (let p = 0; p < d.length; p++) if (d[p] > 1) d[p] = 1;
+      // mostly the real shape, a touch of the balloon so the edges stay thin, then small bumps brought out
+      for (let p = 0; p < d.length; p++) if (d[p] > 0) d[p] = 0.85 * shape[p] / Math.max(warped[p], 1e-3) + 0.15 * d[p];
+      d = boostRelief(d, SIZE, RELIEF_RADIUS, RELIEF_GAIN);
+      for (let p = 0; p < d.length; p++) if (d[p] > 0) d[p] = Math.min(1, 0.12 + 0.88 * d[p]);
     }
     d = smoothTemporal(last, d, 0.5);
     depth.push(d); last = d;

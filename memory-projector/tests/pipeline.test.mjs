@@ -60,3 +60,18 @@ test('with a depth model, the published depth follows its shape inside the figur
   assert.equal(d[5], 0, 'outside the figure stays empty');
   assert.ok(Math.min(...xs.map((x) => d[row * S + x])) > 0, 'every figure pixel keeps some depth');
 });
+
+test('small bumps (a fist in front of a chest) stand out in the published depth', async () => {
+  const { frames, matter } = clip([disc(W, H, 60, 70, 34), disc(W, H, 60, 70, 34)]);
+  // a flat body, a little nearer at its middle, with a small bump (the fist) slightly nearer still
+  const depthModel = { estimate: async () => { const d = new Float32Array(W * H);
+    for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) d[y * W + x] = 5 - Math.hypot(x - 60, y - 70) / 40 + ((x - 50) ** 2 + (y - 70) ** 2 < 36 ? 0.25 : 0);
+    return { depth: d, w: W, h: H }; } };
+  const first = labelFigures(frames[0].alpha, W, H);
+  const r = await runPipeline({ frames, matter, depthModel, keep: new Set(first.figures.map((f) => f.id)) });
+  // the fist sits at frame (50, 70): find it on the 256 grid through the steadying transform
+  const d = r.depth[0], S = 256, T = r.transforms[0];
+  const fx = Math.round(50 * T.scale + T.tx), fy = Math.round(70 * T.scale + T.ty), off = Math.round(14 * T.scale);
+  const peak = d[fy * S + fx], around = (d[fy * S + fx - off] + d[fy * S + fx + off]) / 2;
+  assert.ok(peak - around > 0.27, `the fist stands only ${(peak - around).toFixed(3)} above the chest`);
+});
