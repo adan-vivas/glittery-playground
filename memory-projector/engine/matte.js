@@ -75,7 +75,8 @@ function segmenter(ort, session, { inW, inH, mean, std, half, logits }) {
 }
 
 async function birefnet(ort, adapter, base, onProgress) {
-  const half = adapter.features.has('shader-f16');
+  // Full precision: ONNX Runtime 1.20's WebGPU backend crashed on the half-precision file on a Mac (a bare number error).
+  const half = false;
   const bytes = await fetchModel(base + (half ? 'model_fp16.onnx' : 'model.onnx'), onProgress, 'BiRefNet-lite');
   const session = await ort.InferenceSession.create(bytes, { executionProviders: ['webgpu'] });
   // the half-precision file keeps full-precision input and output (only its weights are halved): always feed float32
