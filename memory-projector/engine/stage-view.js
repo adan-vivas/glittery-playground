@@ -29,7 +29,7 @@ export function createStageView(root) {
   renderer.setClearColor(BG, 1);
   const scene = new THREE.Scene(), camera = new THREE.PerspectiveCamera(30, 1, 0.01, 10);
   camera.position.set(0.35, 0.55, 2.1); camera.lookAt(0, 0.5, 0);
-  const holo = new DepthHologram({ grid: 128, frame: { w: 1, h: 1, gap: 0 }, ink: new THREE.Vector3(0.11, 0.18, 1.0) });
+  const holo = new DepthHologram({ grid: 256, frame: { w: 1, h: 1, gap: 0 }, ink: new THREE.Vector3(0.11, 0.18, 1.0) });
   scene.add(holo.object3d);
   let playing = null, raf = 0, t0 = performance.now();
 
@@ -64,7 +64,7 @@ export function createStageView(root) {
       g.putImageData(img, 0, 0);
     },
     /** Show the encoded memory as dots (a blob: URL). */
-    setDots(url) { holo.show(url); },
+    setDots(url) { holo.show(url, { format: 2 }); },
     /** Loop all panes in step: frames, masks (frame size) and depth, at the memory's rate. */
     play({ frames, masks, depth }) { playing = { frames, masks, depth }; t0 = performance.now(); },
     /** A PNG of the four panes side by side. */

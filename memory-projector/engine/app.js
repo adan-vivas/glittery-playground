@@ -2,6 +2,7 @@
 import { extractFrames, probe } from './frames.js';
 import { createMatter, createFakeMatter } from './matte.js';
 import { createDepthModel } from './depthmodel.js';
+import { createFaceDetector } from './faces.js';
 import { labelFigures } from './figures.js';
 import { runPipeline } from './pipeline.js';
 import { encodeDepthMp4 } from './encode.js';
@@ -17,7 +18,15 @@ const MODEL_BASE = params.get('models');
 const MODEL_URLS = MODEL_BASE && { birefnet: MODEL_BASE + 'birefnet/', modnet: MODEL_BASE + 'modnet/', depth: MODEL_BASE + 'depth/' };
 const state = { file: null, duration: 0, start: 0, pick: null, keep: new Set(), result: null, blob: null, idEdited: false };
 const view = createStageView($('stage-view'));
-let matterP = null, depthP = null;
+let matterP = null, depthP = null, facesP = null;
+
+// The face finder, for blurring. Tests (?matter=fake) use one that finds none.
+function faceDetector() {
+  if (FAKE) return Promise.resolve({ detect: async () => [] });
+  facesP ??= createFaceDetector(MODEL_BASE ? { model: MODEL_BASE + 'face/blaze_face_short_range.tflite' } : undefined)
+    .catch((e) => { console.warn(e); return null; });
+  return facesP;
+}
 
 // The depth model: real shape for the figures. Tests (?matter=fake) use the simple balloon instead.
 function depthModel() {
@@ -150,10 +159,12 @@ $('process').addEventListener('click', async () => {
     const frames = await extractFrames(state.file, { start: state.pick.start, seconds: MAX_SECONDS, fps: FPS,
       onFrame: (i, n, f) => { view.drawVideo(f); status(`Reading frames… ${i + 1} / ${n}`); } });
     stage('frames', 'done');
-    const m = await matter(), dm = await depthModel();
+    const m = await matter(), dm = await depthModel(), blurFaces = $('blur-faces').checked;
+    const faces = blurFaces ? await faceDetector() : null;
+    if (blurFaces && !faces) throw new Error('The face finder couldn\u2019t load, so faces can\u2019t be blurred. Try again, or turn off \u201cBlur faces\u201d.');
     let current = 'cutout';
     stage('cutout', 'running');
-    const result = await runPipeline({ frames, matter: m, depthModel: dm, keep: state.keep, firstAlpha: state.pick.alpha,
+    const result = await runPipeline({ frames, matter: m, depthModel: dm, faces, blurFaces, keep: state.keep, firstAlpha: state.pick.alpha,
       onStage: (name, i, n, d) => {
         if (name !== current) { stage(current, 'done'); current = name; stage(name, 'running'); }
         status(`${name[0].toUpperCase() + name.slice(1)}… ${i + 1} / ${n}`);
@@ -166,6 +177,8 @@ $('process').addEventListener('click', async () => {
     state.result = result;
     const url = URL.createObjectURL(state.blob);
     $('public').src = url;
+    document.querySelector('label[for="public"]').textContent = 'This is what anyone can download: a grey picture of the figures and their depth. ' +
+      (result.facesBlurred ? 'Faces blurred.' : 'Faces are NOT blurred: check that nobody\u2019s face shows before you export.');
     view.setDots(url);
     view.play({ frames, masks: result.masks, depth: result.depth });
     status(`Done: ${(result.depth.length / FPS).toFixed(1)} s, ${Math.round(state.blob.size / 1024)} KB.`);
@@ -188,7 +201,7 @@ $('export').addEventListener('click', async () => {
   if (!state.blob) return;
   const id = slugify($('id').value), title = $('title').value.trim(), date = $('date').value;
   const entry = { id, src: `${id}.mp4`, story: $('story').value.trim(), ...(title && { title }), ...(date && { date }),
-    fps: FPS, seconds: +(state.result.depth.length / FPS).toFixed(2), aspect: 1 };
+    fps: FPS, seconds: +(state.result.depth.length / FPS).toFixed(2), aspect: 1, format: 2 };
   const errs = validateEntry(entry);
   if (errs.length) { status(`Can't export yet: ${errs.join('; ')}.`); return; }
   // The current list: the export adds to it. Only "there is no list yet" (404) starts a new one; anything else stops

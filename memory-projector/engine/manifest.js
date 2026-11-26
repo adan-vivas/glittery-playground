@@ -18,6 +18,7 @@ export function validateEntry(e) {
   if (!(e.seconds > 0 && e.seconds <= MAX_SECONDS)) errs.push(`a memory lasts at most ${MAX_SECONDS} seconds`);
   if (!/\.mp4$/.test(e.src || '')) errs.push('src must be an .mp4');
   if (e.fps !== FPS) errs.push(`fps must be ${FPS}`);
+  if (e.format != null && e.format !== 1 && e.format !== 2) errs.push('format must be 1 or 2');
   return errs;
 }
 

@@ -1168,7 +1168,7 @@ class MemoryProjector extends HTMLElement {
     this._memory = memory;
     const url = memory?.url || null, first = !!url && !this.seen.has(memory.id);
     this.state.developing = first;
-    const done = this.depth?.show(url, { developing: first });
+    const done = this.depth?.show(url, { developing: first, format: memory?.format || 1 });
     if (url && done) done.then(() => {
       const d = this.depth;
       if (this._memory !== memory || d.shown?.url !== url) return;                 // superseded
@@ -1215,7 +1215,7 @@ class MemoryProjector extends HTMLElement {
     const imgPx = Math.abs(top.y - bottom.y) / 2 * this.clientHeight;
     const dist = this.camera.position.distanceTo(pts.getWorldPosition(this._ptsV ??= new THREE.Vector3()));
     this.depth.update(dt, t, { power: Math.min(1, k * 2.5), glitch: this.glitch, flicker,
-      size: THREE.MathUtils.clamp(imgPx / 125, 1, 2.8) * this.renderer.getPixelRatio() * dist });   // small, crisp dots
+      size: Math.max(1, imgPx / 512 * 1.7) * this.renderer.getPixelRatio() * dist });   // about one grid cell: fine dots   // small, crisp dots
   }
 
   _announce() {

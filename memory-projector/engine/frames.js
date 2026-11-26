@@ -24,7 +24,7 @@ export async function probe(src) {
 const seek = (v, t) => new Promise((ok) => { v.addEventListener('seeked', ok, { once: true }); v.currentTime = t; });
 
 /** Frames from `start` for up to `seconds` (never past the clip's end), at `fps`, the longer side at most maxSide. */
-export async function extractFrames(src, { start = 0, seconds = 7, fps = 12, maxSide = 512, onFrame } = {}) {
+export async function extractFrames(src, { start = 0, seconds = 7, fps = 12, maxSide = 960, onFrame } = {}) {
   const { v, done } = await open(src);
   try {
     const end = Math.min(v.duration, start + seconds), n = Math.max(1, Math.floor((end - start) * fps + 1e-6));

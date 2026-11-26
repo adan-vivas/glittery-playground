@@ -24,6 +24,7 @@
     section { border-top: 1px solid var(--line); padding: 20px 0 24px; display: grid; grid-template-columns: 160px 1fr; gap: 16px; }
     section > h2 { font-size: 13px; font-weight: 500; text-transform: uppercase; letter-spacing: .08em; margin: 2px 0 0; color: var(--mute); }
     section[aria-disabled="true"] { opacity: .45; pointer-events: none; }
+    label.switch { display: flex; gap: 8px; align-items: baseline; color: var(--ink); font-size: 14px; margin: 0 0 12px; }
     label { display: block; font-size: 13px; color: var(--mute); margin: 0 0 4px; }
     input[type=text], input[type=date], textarea { width: 100%; font: inherit; padding: 8px 10px; border: 1px solid var(--line); border-radius: 6px; background: #fff; }
     textarea { min-height: 110px; resize: vertical; }
@@ -47,7 +48,7 @@
     .pane canvas { width: 100%; aspect-ratio: 1; border-radius: 6px; background: #e4e4e2; display: block; }
     .pane figcaption { font-size: 12px; color: var(--mute); margin-top: 4px; }
     .tools { display: flex; gap: 8px; margin-top: 12px; }
-    #public { width: 256px; height: 256px; background: #000; border-radius: 6px; display: block; }
+    #public { width: 512px; max-width: 100%; aspect-ratio: 2; background: #000; border-radius: 6px; display: block; }
     .status { font-size: 13px; color: var(--mute); min-height: 1.4em; }
     @media (max-width: 760px) { section { grid-template-columns: 1fr; } .row { grid-template-columns: 1fr; } #stage-view { grid-template-columns: repeat(2, 1fr); } }
   </style>
@@ -91,6 +92,8 @@
       <h2>3 · Pick</h2>
       <div>
         <p class="note" id="matter-note">Load a clip to find the figures in its first frame.</p>
+        <label class="switch"><input id="blur-faces" type="checkbox" checked> Blur faces (recommended): anyone can download
+          the memory, and it carries a grey picture of the people in it</label>
         <div class="pick">
           <canvas id="pick-canvas" width="512" height="288"></canvas>
           <div class="figures" id="figures"></div>
@@ -122,7 +125,7 @@
     <section id="s-check" aria-disabled="true">
       <h2>5 · Check</h2>
       <div>
-        <label for="public">This is what anyone can download: depth only, no colour, no faces.</label>
+        <label for="public">This is what anyone can download: a grey picture of the figures and their depth.</label>
         <video id="public" muted loop playsinline autoplay></video>
       </div>
     </section>
