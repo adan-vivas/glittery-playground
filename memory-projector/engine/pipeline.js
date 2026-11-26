@@ -10,6 +10,32 @@ import { SIZE, FPS, encodeMemoryFrame } from '../lib/depth-format.js';
 
 const tick = () => new Promise((r) => setTimeout(r, 0));   // let the page draw between frames
 
+// The face finder also "finds" faces in fists and hands. A face sits in the top part of a figure, so keep a box when
+// its centre is in the top 45 % of the kept figures' height, or when the finder is very sure (score ≥ 0.8).
+export function headsOnly(boxes, mask, W, H) {
+  let top = -1, bottom = -1;
+  for (let y = 0; y < H && top < 0; y++) for (let x = 0; x < W; x++) if (mask[y * W + x] > 0.5) { top = y; break; }
+  for (let y = H - 1; y >= 0 && bottom < 0; y--) for (let x = 0; x < W; x++) if (mask[y * W + x] > 0.5) { bottom = y; break; }
+  if (top < 0) return boxes.filter((b) => (b.score ?? 1) >= 0.8);
+  return boxes.filter((b) => (b.score ?? 1) >= 0.8 || (b.y + b.h / 2 - top) / Math.max(1, bottom - top) < 0.45);
+}
+
+// Full contrast inside the figures: their 2nd to 98th percentile of brightness stretched to 0..1, eased over time
+// (like the depth) so the picture doesn't pulse as the figure moves.
+export function stretchLuma(l, d, ease) {
+  const hist = new Uint32Array(256);
+  let n = 0;
+  for (let p = 0; p < l.length; p++) if (d[p] > 0) { hist[Math.min(255, Math.round(l[p] * 255))]++; n++; }
+  if (!n) return l;
+  const pct = (q) => { let c = 0; for (let v = 0; v < 256; v++) { c += hist[v]; if (c >= q * n) return v / 255; } return 1; };
+  let lo = pct(0.02), hi = pct(0.98);
+  if (ease.lo != null) { lo = ease.lo + 0.35 * (lo - ease.lo); hi = ease.hi + 0.35 * (hi - ease.hi); }
+  ease.lo = lo; ease.hi = hi;
+  const span = Math.max(0.05, hi - lo);
+  for (let p = 0; p < l.length; p++) if (d[p] > 0) l[p] = Math.min(1, Math.max(0, (l[p] - lo) / span));
+  return l;
+}
+
 // A frame's brightness (0..1), from its pixels.
 export function readFrameLuma(frame) {
   const w = frame.width, h = frame.height, c = new OffscreenCanvas(w, h), g = c.getContext('2d', { willReadFrequently: true });
@@ -20,16 +46,16 @@ export function readFrameLuma(frame) {
 }
 
 // Blur faces in a brightness map: each box ({ x, y, w, h }, frame px), grown by a third, gets a strong blur (a box blur
-// a third of the face wide, twice), so features are gone but the head's overall light stays.
+// half the face wide, three times), so features are gone but the head's overall light stays.
 export function blurBoxes(luma, W, H, boxes) {
   for (const b of boxes) {
     const g = 0.35, x0 = Math.max(0, Math.floor(b.x - b.w * g)), y0 = Math.max(0, Math.floor(b.y - b.h * g));
     const x1 = Math.min(W, Math.ceil(b.x + b.w * (1 + g))), y1 = Math.min(H, Math.ceil(b.y + b.h * (1 + g)));
-    const r = Math.max(2, Math.round(Math.max(b.w, b.h) / 3)), bw = x1 - x0, bh = y1 - y0;
+    const r = Math.max(2, Math.round(Math.max(b.w, b.h) / 2)), bw = x1 - x0, bh = y1 - y0;
     if (bw <= 0 || bh <= 0) continue;
     let a = new Float32Array(bw * bh);
     for (let y = 0; y < bh; y++) for (let x = 0; x < bw; x++) a[y * bw + x] = luma[(y0 + y) * W + x0 + x];
-    for (let pass = 0; pass < 2; pass++) {
+    for (let pass = 0; pass < 3; pass++) {
       const t = new Float32Array(a.length), o = new Float32Array(a.length);
       for (let y = 0; y < bh; y++) for (let x = 0; x < bw; x++) {   // rows
         let s = 0, n = 0; for (let k = Math.max(0, x - r); k <= Math.min(bw - 1, x + r); k++) { s += a[y * bw + k]; n++; } t[y * bw + x] = s / n; }
@@ -127,7 +153,7 @@ export async function runPipeline({ frames, matter, keep, firstAlpha, minArea, d
     masks.push(m);
     if (depthModel) real.push(figureDepth((await depthModel.estimate(frames[i])).depth, m, ease));
     lumas.push(Float32Array.from(readLuma(frames[i])));   // a copy: blurring faces must not touch the caller's data
-    boxes.push(blurFaces && faces ? await faces.detect(frames[i]) : []);
+    boxes.push(blurFaces && faces ? headsOnly(await faces.detect(frames[i]), m, W, H) : []);
     if (m.some((v) => v > 0.5)) near = nearKept(m, W, H, reach);
     onStage('cutout', i, n, { frame: frames[i], mask: masks[i], w: W, h: H });
     await tick();
@@ -144,7 +170,7 @@ export async function runPipeline({ frames, matter, keep, firstAlpha, minArea, d
   const T = steadyTransforms(measures, { out: SIZE, fps: FPS });
   onStage('steady', n - 1, n, { transforms: T });
 
-  const depth = [], luma = [];
+  const depth = [], luma = [], levels = {};
   let last = null;
   for (let i = 0; i < n; i++) {
     const warped = warp(masks[i], W, H, T[i]);
@@ -164,7 +190,7 @@ export async function runPipeline({ frames, matter, keep, firstAlpha, minArea, d
     for (let p = 0; p < lm.length; p++) lm[p] = lumas[i][p] * masks[i][p];
     const lw = warp(lm, W, H, T[i]), l = new Float32Array(SIZE * SIZE);
     for (let p = 0; p < l.length; p++) if (d[p] > 0) l[p] = Math.min(1, lw[p] / Math.max(warped[p], 1e-3));
-    luma.push(l);
+    luma.push(stretchLuma(l, d, levels));
     onStage('depth', i, n, { depth: d });
     if (i % 4 === 3) await tick();
   }

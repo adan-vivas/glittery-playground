@@ -50,7 +50,7 @@ const VS = /* glsl */ `
     // light picks out the relief; nearer parts are denser; the back is a faint ghost that gives volume when it turns
     float relief = (.28 + 1.1 * pow(key, 1.5) + .4 * rim) * (.6 + .4 * d);
     float luma = texture2D(uDepth, vec2(uv.x * .5, uv.y)).r;
-    vShade = (uFormat > 1.5 ? (.1 + .95 * luma) * (.55 + .45 * min(relief, 1.3)) : relief) * (side > 0. ? 1. : .2);
+    vShade = (uFormat > 1.5 ? (.32 + .78 * luma) * (.55 + .45 * min(relief, 1.3)) : relief) * (side > 0. ? 1. : .06);   // the back: a trace
     vGlow = (1. - smoothstep(0., .18, d)) * (side > 0. ? 1. : .3);   // the thin edge of the figure glows
 
     // a glitch: now and then a band of the figure slips sideways

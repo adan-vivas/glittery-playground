@@ -17,8 +17,8 @@ export async function createFaceDetector({ model = FACE_MODEL } = {}) {
   const det = await FaceDetector.createFromOptions(files, {
     baseOptions: { modelAssetPath: model, delegate: 'CPU' }, runningMode: 'IMAGE', minDetectionConfidence: 0.45 });
   const tile = new OffscreenCanvas(1, 1), tg = tile.getContext('2d');
-  const find = (img, ox, oy, s) => det.detect(img).detections.map(({ boundingBox: b }) =>
-    ({ x: ox + b.originX / s, y: oy + b.originY / s, w: b.width / s, h: b.height / s }));
+  const find = (img, ox, oy, s) => det.detect(img).detections.map(({ boundingBox: b, categories }) =>
+    ({ x: ox + b.originX / s, y: oy + b.originY / s, w: b.width / s, h: b.height / s, score: categories?.[0]?.score ?? 1, tile: s !== 1 }));
   return {
     name: 'MediaPipe face detector', license: 'Apache-2.0',
     async detect(frame) {

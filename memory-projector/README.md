@@ -78,8 +78,10 @@ no page actions: buttons such as "Talk to me" belong to the page around it.
 `title` is only read out to screen readers and sent with events; the table shows the story alone, without a heading.
 Keep a story to a paragraph (about 120 words at most): it crawls at about two words a second.
 
-Each `.mp4` is a **depth-only** video, 256 × 256 px, 12 fps, at most 7 s (`lib/depth-format.js`): black where nobody is,
-and for the figures a grey from 64 (farthest) to 255 (nearest). No colour, texture or faces.
+Each `.mp4` (`"format": 2`) is a greyscale video, 1024 × 512 px, 12 fps, at most 7 s (`lib/depth-format.js`): on the
+left, a grey picture of the kept figures (faces blurred unless you turned that off); on the right, their depth, black
+where nobody is and a grey from 64 (farthest) to 255 (nearest). No colour, and nothing outside the figures. The first
+memories were depth only (`"format": 1`, 256 × 256); the projector still plays them.
 
 ## Add a memory with the engine
 
@@ -88,8 +90,9 @@ and for the figures a grey from 64 (farthest) to 255 (nearest). No colour, textu
    as "Most Compatible" first.
 3. Write the story; optionally a title and a date.
 4. In the first frame, click the figures to keep (and drop the ones you don't want, like a reflection).
-5. Process, watch the stages, and check the public preview: it plays exactly the file anyone could download.
-6. Export. Put the downloaded `<id>.mp4` and `memories.json` into `memories/` and commit them.
+5. **Blur faces** is on by default; turn it off for a memory only if you're sure nobody's face shows.
+6. Process, watch the stages, and check the public preview: it plays exactly the file anyone could download.
+7. Export. Put the downloaded `<id>.mp4` and `memories.json` into `memories/` and commit them.
 
 The engine runs entirely in your browser. Your video is never uploaded, written to disk, or committed.
 
@@ -97,7 +100,8 @@ The engine runs entirely in your browser. Your video is never uploaded, written 
 
 - Original clips stay on your machine. Never commit them: `.gitignore` refuses common video formats here, except the
   depth-only files in `memories/`, the synthetic demo and test fixtures.
-- What is published is depth only: a soft grey silhouette, not a picture of anyone.
+- What is published is a grey picture of the kept figures and their depth. Faces are blurred by default (MediaPipe's
+  face finder, looking only at the top of each figure, where heads are); the public check says whether they were.
 - The engine's stage view (and its stills and recordings) shows the original video. Those are for you; don't publish them.
 
 ## Rebuild the model

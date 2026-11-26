@@ -116,3 +116,29 @@ test('faces are blurred when asked, and left sharp when not', async () => {
   assert.ok(b < 0.1, `the face is still sharp (${b})`);
   assert.equal(blurred.facesBlurred, true); assert.equal(sharp.facesBlurred, false);
 });
+
+test('a "face" found on the hands is not blurred; one on the head is', async () => {
+  const c = pictureClip(), keep = new Set(labelFigures(c.frames[0].alpha, W, H).figures.map((f) => f.id));
+  for (let y = 78; y < 94; y++) for (let x = 52; x < 68; x++) c.frames[0].luma[y * W + x] = (Math.floor(x / 4) + Math.floor(y / 4)) % 2 ? 1 : 0;   // "hands"
+  c.faces = { detect: async () => [{ x: 52, y: 40, w: 16, h: 16, score: 0.6 }, { x: 52, y: 78, w: 16, h: 16, score: 0.67 }] };
+  const r = await runPipeline({ ...c, keep, blurFaces: true });
+  const T = r.transforms[0], l = r.luma[0];
+  const flicker = (y0) => { let s = 0, n = 0;
+    for (let y = y0 + 2; y < y0 + 14; y++) for (let x = 54; x < 66; x++) {
+      const X = Math.round(x * T.scale + T.tx), Y = Math.round(y * T.scale + T.ty);
+      s += Math.abs(l[Y * SIZE + X] - l[Y * SIZE + X + Math.round(4 * T.scale)]); n++; }
+    return s / n; };
+  assert.ok(flicker(40) < 0.1, `the head should be blurred (${flicker(40)})`);
+  assert.ok(flicker(78) > 0.3, `the hands should stay sharp (${flicker(78)})`);
+});
+
+test('a dull picture is stretched to full contrast inside the figure', async () => {
+  const alpha = disc(W, H, 60, 70, 34), luma = new Float32Array(W * H);
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) luma[y * W + x] = 0.4 + 0.2 * (x / W);   // 0.4 to 0.6 only
+  const frames = [0, 1].map(() => ({ width: W, height: H, alpha, luma }));
+  const r = await runPipeline({ frames, matter: { segment: async (f) => ({ alpha: f.alpha, w: W, h: H }) }, readLuma: (f) => f.luma,
+    keep: new Set(labelFigures(alpha, W, H).figures.map((f) => f.id)) });
+  let lo = 1, hi = 0;
+  for (let i = 0; i < r.luma[0].length; i++) if (r.depth[0][i] > 0) { lo = Math.min(lo, r.luma[0][i]); hi = Math.max(hi, r.luma[0][i]); }
+  assert.ok(lo < 0.1 && hi > 0.9, `range ${lo.toFixed(2)}..${hi.toFixed(2)}`);
+});
