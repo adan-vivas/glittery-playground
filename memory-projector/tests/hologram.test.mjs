@@ -118,3 +118,14 @@ test('reduced motion: a still figure', async () => {
     assert.ok(await inkCells(t.page, r) > FIGURE, 'no figure under reduced motion');
   } finally { await t.close(); }
 });
+
+test('a format-2 file plays as format 2 even when the list doesn\'t say so', async () => {
+  const t = await openPage('/memory-projector/index.html', { waitFor: READY,
+    routes: manifest([entry('f2', '../tests/fixtures/format2.mp4')]) });   // no "format" in the entry
+  try {
+    await powerOn(t.page);
+    await t.page.waitForFunction(() => document.querySelector('memory-projector').depth.ready, null, { timeout: 20000 });
+    await t.page.waitForTimeout(300);
+    assert.equal(await t.page.evaluate(() => document.querySelector('memory-projector').depth.material.uniforms.uFormat.value), 2);
+  } finally { await t.close(); }
+});

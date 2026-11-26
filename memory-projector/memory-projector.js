@@ -17,7 +17,7 @@ import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { createPlaylist } from './lib/playlist.js';
-import { DepthHologram } from './holo-depth.js';
+import { DepthHologram } from './holo-depth.js?v=3';   // versioned: a cached copy must never outlive a change
 import { wrapLines, crawlState } from './lib/crawl.js';
 import { createSeen } from './lib/seen.js';
 

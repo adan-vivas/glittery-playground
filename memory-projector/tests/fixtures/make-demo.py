@@ -5,6 +5,7 @@ spheres and capsules dances while a ball bounces beside it.
   python3 tests/fixtures/make-demo.py                    -> demo/demo-dance.mp4 + demo/memories.json
   python3 tests/fixtures/make-demo.py --empty OUT.mp4    -> a memory with no figure at all
   python3 tests/fixtures/make-demo.py --still OUT.mp4    -> the figure standing still (for stable pixel tests)
+  python3 tests/fixtures/make-demo.py --format2 OUT.mp4  -> format 2: a grey picture beside the depth (1024 x 512)
 
 Format numbers are copied from lib/depth-format.js (SIZE, FPS, EMPTY 0, figure 64 + d * 191). Keep them in step.
 """
@@ -67,10 +68,18 @@ def frame(i, still=False, empty=False):
     return out
 
 
+def format2(depth_frame):
+    # format 2 at twice the size: the picture (stripes across the figure) beside the depth
+    d = np.kron(depth_frame, np.ones((2, 2), np.uint8))
+    pic = np.where(d > 0, (90 + 120 * ((np.arange(d.shape[1])[None, :] // 24) % 2)).astype(np.uint8), 0).astype(np.uint8)
+    return np.hstack([pic, d])
+
+
 def write(path, frames):
     os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
+    h, w = frames[0].shape
     p = subprocess.Popen(["ffmpeg", "-y", "-loglevel", "error", "-f", "rawvideo", "-pix_fmt", "gray",
-                          "-s", f"{SIZE}x{SIZE}", "-r", str(FPS), "-i", "-", "-c:v", "libx264", "-profile:v", "baseline",
+                          "-s", f"{w}x{h}", "-r", str(FPS), "-i", "-", "-c:v", "libx264", "-profile:v", "baseline",
                           "-pix_fmt", "yuv420p", "-b:v", "400k", "-movflags", "+faststart", path], stdin=subprocess.PIPE)
     for f in frames:
         p.stdin.write(f.tobytes())
@@ -81,6 +90,9 @@ def write(path, frames):
 
 def main():
     n = FPS * SECONDS
+    if len(sys.argv) == 3 and sys.argv[1] == "--format2":
+        write(sys.argv[2], [format2(frame(i)) for i in range(n)])
+        return
     if len(sys.argv) == 3 and sys.argv[1] in ("--empty", "--still"):
         write(sys.argv[2], [frame(i, still=sys.argv[1] == "--still", empty=sys.argv[1] == "--empty") for i in range(n)])
         return

@@ -136,7 +136,11 @@ export class DepthHologram {
     this.loaded = null;            // url whose frames are in the video
     this.ready = false;            // the video has a frame to show
     this._waiters = [];
-    video.addEventListener('loadeddata', () => { this.ready = true; tex.needsUpdate = true; this._play(); });
+    video.addEventListener('loadeddata', () => {
+      // the file says what it is: twice as wide as tall is format 2 (picture | depth), square is format 1 (depth only)
+      this.material.uniforms.uFormat.value = video.videoWidth >= 1.5 * video.videoHeight ? 2 : 1;
+      this.ready = true; tex.needsUpdate = true; this._play();
+    });
     video.addEventListener('error', () => {
       if (!this.loaded) return;
       console.warn(`memory-projector: could not load memory video ${this.loaded}`);
