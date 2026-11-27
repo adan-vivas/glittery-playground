@@ -78,6 +78,18 @@ const TABLE_SCENE = {
   dial: { roughness: 0.23 },
 };
 const clone = (o) => JSON.parse(JSON.stringify(o));
+// The memory, the story and touch: part of the scene, live on any page (the lab drives them; fixtures save them).
+//   hologram  dotSize (× one grid cell), density (share of dots shown), brightness, contrast (of the picture), depth
+//             (how deep the figure is, × its height), scanlines (strength), scanCount (bands over its height), flicker,
+//             glitch (how often), back (the faint back layer), motes (the dots rising in the beam), color
+//   story     speed (words a second), size (px on its 1024-px canvas), opacity, light (the fan from the front lens)
+//   touch     on, radius (× the memory's height), strength, recover (how fast the dots drift back, per second)
+const PLAY = {
+  hologram: { dotSize: 1.7, density: 1, brightness: 1, contrast: 1, depth: 0.32, scanlines: 0.5, scanCount: 46, flicker: 0.12,
+    glitch: 1, back: 0.06, motes: 1, color: '#1c2eff' },
+  story: { speed: 2, size: 44, opacity: 0.62, light: 1 },
+  touch: { on: true, radius: 0.15, strength: 1.6, recover: 1.5 },
+};
 
 function gradientTexture(stops, vertical = true) {
   const c = document.createElement('canvas');
@@ -612,12 +624,26 @@ class MemoryProjector extends HTMLElement {
   // ---------------------------------------------------------------- table scene
   // Merge a partial config ({ camera: { elevation: 30 } }) and rebuild what it touches.
   setScene(patch = {}) {
-    if (!this.table) return;
+    const play = {};
+    for (const k of Object.keys(PLAY)) if (patch[k]) { play[k] = patch[k]; patch = { ...patch }; delete patch[k]; }
+    if (Object.keys(play).length) this._setPlay(play);
+    if (!this.table || !Object.keys(patch).length) {
+      if (Object.keys(play).length) this.dispatchEvent(new CustomEvent('scenechange', { detail: this.getScene() }));
+      return;
+    }
     for (const k of Object.keys(patch)) Object.assign(this.sceneCfg[k] ??= {}, patch[k]);
     this._applyScene();
     this.dispatchEvent(new CustomEvent('scenechange', { detail: clone(this.sceneCfg) }));
   }
-  getScene() { return clone(this.sceneCfg ?? TABLE_SCENE); }
+  getScene() { return { ...clone(this.sceneCfg ?? TABLE_SCENE), ...clone(this._play()) }; }
+
+  _play() { return (this.playCfg ??= clone(PLAY)); }
+  _setPlay(patch) {
+    const P = this._play(), storyBefore = JSON.stringify(P.story);
+    for (const k of Object.keys(patch)) Object.assign(P[k], patch[k]);
+    this.depth?.setLook(P.hologram, P.touch);
+    if (JSON.stringify(P.story) !== storyBefore && this._crawl) this._crawlNext = this._memory?.story || '';   // re-lay the story
+  }
   static get defaultScene() { return clone(TABLE_SCENE); }
 
   _applyScene() {
@@ -901,6 +927,12 @@ class MemoryProjector extends HTMLElement {
         H.target = H.anchor.clone().setY(THREE.MathUtils.clamp(hit.y + H.off.y, 0.012, 0.04));
         return;
       }
+      // the cursor through the memory disturbs its dots
+      if (!pressed && this.state.power && this._play().touch.on && this.holo) {
+        toNdc(e);
+        const hit = ray.intersectObject(this.holo.frame)[0];
+        if (hit) { const p = this.depth.object3d.worldToLocal(hit.point.clone()); this.depth.touch(p.x, p.y); }
+      }
       if (!pressed && e.pointerType === 'mouse') this.canvas.style.cursor = pick(e) ? 'pointer' : !this.table || (movable() && hitsBody(e)) ? 'grab' : '';
     });
 
@@ -1023,7 +1055,7 @@ class MemoryProjector extends HTMLElement {
 
   _crawlFont() {
     const family = getComputedStyle(this).fontFamily || '"Helvetica Neue", Helvetica, Arial, sans-serif';
-    return `400 ${CRAWL.font}px ${family}`;
+    return `400 ${this._play().story.size}px ${family}`;
   }
 
   // Draw the crawl at time `now` (s). Moving text, faded at the near and far edges; still under reduced motion.
@@ -1031,10 +1063,10 @@ class MemoryProjector extends HTMLElement {
     const c = this.projCanvas, g = c.getContext('2d'), cr = this._crawl, [W, H] = CRAWL.px;
     g.clearRect(0, 0, W, H);
     if (cr && cr.lines.length) {
-      const lh = CRAWL.font * CRAWL.lineHeight;
+      const lh = this._play().story.size * CRAWL.lineHeight;
       const st = reduceMotion ? { offset: -lh * 0.5, alpha: 1 }
         : crawlState(now - cr.t0, { lineCount: cr.lines.length, lineHeight: lh, viewHeight: H, words: cr.words,
-          wordsPerSecond: CRAWL.wordsPerSecond, pause: CRAWL.pause });
+          wordsPerSecond: this._play().story.speed, pause: CRAWL.pause });
       if (st.alpha > 0) {
         g.save();
         g.font = cr.font;
@@ -1156,6 +1188,7 @@ class MemoryProjector extends HTMLElement {
     // the memory itself
     const depth = this.depth = new DepthHologram({ frame: HOLO, ink: HOLO_INK, reduceMotion });
     group.add(depth.object3d);
+    depth.setLook(this._play().hologram, this._play().touch);
 
     this.holo = { group, beam, motes, frame };
   }
@@ -1191,7 +1224,7 @@ class MemoryProjector extends HTMLElement {
     const t = reduceMotion ? 0 : now / 1000;
     if (this.table) h.frame.quaternion.copy(this.rig.quaternion).invert().multiply(this.camera.quaternion);   // a fixed view: face the camera squarely
     else { const cam = this.camera.position; h.frame.rotation.y = Math.atan2(cam.x - HOLO.lens.x, cam.z - HOLO.lens.z); }
-    if (!reduceMotion && this.state.power && Math.random() < dt * 0.25) this.glitch = Math.max(this.glitch, 0.3);   // the odd stray flicker
+    if (!reduceMotion && this.state.power && Math.random() < dt * 0.25 * this._play().hologram.glitch) this.glitch = Math.max(this.glitch, 0.3);   // the odd stray flicker
     this.glitch = Math.max(0, this.glitch - dt * 2.6);
     const flicker = reduceMotion ? 1 : 1 - 0.05 * Math.random() * (this.state.power ? 1 : 0);
     bu.uGrow.value = grow;
@@ -1200,7 +1233,7 @@ class MemoryProjector extends HTMLElement {
     bu.uPulse.value = 0;
     mu.uTime.value = t;
     mu.uGrow.value = grow;
-    mu.uAlpha.value = Math.min(1, k * 2);
+    mu.uAlpha.value = Math.min(1, k * 2) * this._play().hologram.motes;
     mu.uSize.value = 2.2 * this.renderer.getPixelRatio();
     h.group.visible = k > 0.001;
     this.lensGlow.material.opacity = 0.85 * grow;
@@ -1215,7 +1248,7 @@ class MemoryProjector extends HTMLElement {
     const imgPx = Math.abs(top.y - bottom.y) / 2 * this.clientHeight;
     const dist = this.camera.position.distanceTo(pts.getWorldPosition(this._ptsV ??= new THREE.Vector3()));
     this.depth.update(dt, t, { power: Math.min(1, k * 2.5), glitch: this.glitch, flicker,
-      size: Math.max(1, imgPx / 512 * 1.7) * this.renderer.getPixelRatio() * dist });   // about one grid cell: fine dots   // small, crisp dots
+      size: Math.max(1, imgPx / 512 * this._play().hologram.dotSize) * this.renderer.getPixelRatio() * dist });   // about one grid cell: fine dots
   }
 
   _announce() {
@@ -1256,8 +1289,9 @@ class MemoryProjector extends HTMLElement {
       if (this._crawlFade === 0 || !this._crawl) { this._setCrawl(this._crawlNext); this._crawlNext = undefined; }
     } else this._crawlFade = Math.min(1, (this._crawlFade ?? 1) + dt / 0.35);
     if (this.state.power && this._crawl?.lines.length && !reduceMotion) this._drawCrawl(now);
-    this.proj.material.opacity = 0.62 * this.projFade.v * flicker * (this._crawlFade ?? 1);
-    this.projBeam.material.uniforms.uAlpha.value = this.projFade.v * flicker;
+    const story = this._play().story;
+    this.proj.material.opacity = story.opacity * this.projFade.v * flicker * (this._crawlFade ?? 1);
+    this.projBeam.material.uniforms.uAlpha.value = story.light * this.projFade.v * flicker;
     this.projBeam.visible = this.projFade.v > 0.005;
     if (!this.table) this.controls.update();
     this._tickHologram(dt, performance.now());

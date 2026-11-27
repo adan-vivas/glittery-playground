@@ -87,6 +87,22 @@ const CONTROLS = [
     ['shell.clearcoat', 'Clear coat', 0, 1, 0.01], ['shell.coatRoughness', 'Coat roughness', 0, 1, 0.01],
     ['shell.sheen', 'Sheen', 0, 1, 0.01], ['shell.ao', 'Contact shadow (AO)', 0, 2, 0.01],
   ]],
+  ['Memory (hologram)', [
+    ['hologram.dotSize', 'Dot size', 0.5, 5, 0.05], ['hologram.density', 'Density', 0, 1, 0.01],
+    ['hologram.brightness', 'Brightness', 0, 2.5, 0.01], ['hologram.contrast', 'Contrast', 0.3, 3, 0.01],
+    ['hologram.depth', 'Depth', 0, 1, 0.01], ['hologram.back', 'Back layer', 0, 0.5, 0.01],
+    ['hologram.scanlines', 'Scanlines', 0, 1, 0.01], ['hologram.scanCount', 'Scan bands', 8, 160, 1],
+    ['hologram.flicker', 'Flicker', 0, 0.6, 0.01], ['hologram.glitch', 'Glitches', 0, 6, 0.1],
+    ['hologram.motes', 'Rising motes', 0, 2, 0.01], ['hologram.color', 'Colour', 'color'],
+  ]],
+  ['Touch', [
+    ['touch.on', 'Cursor disturbs the dots', 'bool'], ['touch.radius', 'Reach', 0.02, 0.5, 0.005],
+    ['touch.strength', 'Strength', 0, 4, 0.05], ['touch.recover', 'Settle speed', 0.2, 8, 0.1],
+  ]],
+  ['Story', [
+    ['story.speed', 'Words a second', 0.5, 6, 0.1], ['story.size', 'Text size', 20, 90, 1],
+    ['story.opacity', 'Opacity', 0, 1, 0.01], ['story.light', 'Light fan', 0, 3, 0.01],
+  ]],
   ['Strap lug (aluminium)', [
     ['dial.roughness', 'Roughness', 0, 1, 0.01],
   ]],

@@ -39,7 +39,9 @@ python3 -m http.server 4317
 
 Then open <http://localhost:4317/memory-projector/> for your memories, or <http://localhost:4317/memory-projector/demo/> for the synthetic demo.
 Add `?lab` to the address (or press Shift+L) for the scene lab: camera, light, room and materials, live, with fixtures you
-can save and copy out as JSON (`lab.js`).
+can save and copy out as JSON (`lab.js`), plus the memory itself (dot size, density, brightness, contrast, depth, scanlines, flicker,
+glitches, colour), touch (move the cursor through a memory and its dots part and ripple, then drift back) and the
+story (speed, size, opacity, the light fan). In code: `setScene({ hologram, touch, story })`.
 
 ## Use the component
 

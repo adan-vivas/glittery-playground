@@ -35,6 +35,9 @@ test('the projector page has the scene lab: ?lab or Shift+L, and its sliders cha
     await t.page.locator('#scene-lab input[data-path="camera.elevation"]').fill('60');
     assert.equal(await t.page.evaluate(() => document.querySelector('memory-projector').getScene().camera.elevation), 60);
     assert.equal(await t.page.locator('#scene-lab [data-path^="paper."]').count(), 0, 'no paper controls: this page has no paper');
+    await t.page.locator('#scene-lab input[data-path="hologram.dotSize"]').fill('3');
+    assert.equal(await t.page.evaluate(() => document.querySelector('memory-projector').getScene().hologram.dotSize), 3);
+    for (const p of ['touch.strength', 'story.speed', 'hologram.color']) assert.equal(await t.page.locator(`#scene-lab [data-path="${p}"]`).count(), 1, p);
     await t.page.keyboard.press('Shift+L');
     assert.equal(await t.page.isVisible('#scene-lab'), false);
     assert.deepEqual(t.errors, []);

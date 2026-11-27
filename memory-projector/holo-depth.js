@@ -20,7 +20,8 @@ const VS = /* glsl */ `
   #define FIGURE_MIN ${FIGURE_MIN.toFixed(1)}
   #define FIGURE_SPAN ${FIGURE_SPAN.toFixed(1)}
   uniform sampler2D uDepth;
-  uniform float uSize, uRise, uTime, uGlitch, uThick, uLensY, uMotion, uTexel, uFormat;
+  uniform float uSize, uRise, uTime, uGlitch, uThick, uLensY, uMotion, uTexel, uFormat, uDensity, uContrast, uBack, uTouchR, uTouchK;
+  uniform vec4 uTouches[8];                    // the cursor's recent path: xy in the hologram's frame, w = strength
   attribute float aRand, aCell;
   varying float vA, vY, vShade, vGlow;
 
@@ -36,7 +37,7 @@ const VS = /* glsl */ `
     uv += (vec2(fract(aRand * 91.7), fract(aRand * 53.3)) - .5) * aCell * .7;   // break up the grid
     float d = depthAt(uv);
     vA = 0.;
-    if (d < 0.) { gl_Position = vec4(2., 2., 2., 1.); gl_PointSize = 0.; return; }
+    if (d < 0. || fract(aRand * 7.31) >= uDensity) { gl_Position = vec4(2., 2., 2., 1.); gl_PointSize = 0.; return; }
 
     // slope of the shape, for light and shade (outside the figure counts as the edge, depth 0)
     float e = uTexel * 2.;
@@ -49,8 +50,8 @@ const VS = /* glsl */ `
     float rim = pow(1. - abs(n.z), 3.);
     // light picks out the relief; nearer parts are denser; the back is a faint ghost that gives volume when it turns
     float relief = (.28 + 1.1 * pow(key, 1.5) + .4 * rim) * (.6 + .4 * d);
-    float luma = texture2D(uDepth, vec2(uv.x * .5, uv.y)).r;
-    vShade = (uFormat > 1.5 ? (.32 + .78 * luma) * (.55 + .45 * min(relief, 1.3)) : relief) * (side > 0. ? 1. : .06);   // the back: a trace
+    float luma = clamp((texture2D(uDepth, vec2(uv.x * .5, uv.y)).r - .5) * uContrast + .5, 0., 1.);
+    vShade = (uFormat > 1.5 ? (.32 + .78 * luma) * (.55 + .45 * min(relief, 1.3)) : relief) * (side > 0. ? 1. : uBack);   // the back: a trace
     vGlow = (1. - smoothstep(0., .18, d)) * (side > 0. ? 1. : .3);   // the thin edge of the figure glows
 
     // a glitch: now and then a band of the figure slips sideways
@@ -58,6 +59,15 @@ const VS = /* glsl */ `
     float slip = uGlitch * uMotion * step(.86, h21(vec2(band, floor(uTime * 9.)))) * (h21(vec2(band, 3.)) - .5) * .12;
 
     vec3 p = vec3(uv.x - .5 + slip, uv.y, side * (.012 + d) * uThick);
+    // touch: the cursor's path pushes dots aside and sets them rippling; each point fades, and the dots drift back
+    for (int i = 0; i < 8; i++) {
+      vec4 t = uTouches[i];
+      if (t.w <= .001) continue;
+      vec2 dd = p.xy - t.xy;
+      float f = t.w * exp(-dot(dd, dd) / (uTouchR * uTouchR));
+      p.xy += (length(dd) > 1e-4 ? normalize(dd) : vec2(0., 1.)) * f * uTouchR * .8 * uTouchK;
+      p.z += f * uTouchR * uTouchK * (.6 + .6 * sin(aRand * 31. + uTime * 7.));
+    }
     // rising out of the lens (and draining back into it): each dot a beat after the last, spiralling a little
     float k = clamp((uRise - aRand * .45) / .55, 0., 1.);
     k = k * k * (3. - 2. * k);
@@ -74,14 +84,14 @@ const VS = /* glsl */ `
 
 const FS = /* glsl */ `
   uniform vec3 uInk;
-  uniform float uAlpha, uTime, uMotion;
+  uniform float uAlpha, uTime, uMotion, uScan, uScanCount, uGain;
   varying float vA, vY, vShade, vGlow;
   void main() {
     if (vA <= 0.) discard;
     float r = length(gl_PointCoord - .5);
     if (r > .5) discard;
-    float scan = 1. - (.25 + .25 * uMotion) * smoothstep(.3, 1., sin((vY * 46. - uTime * 1.3) * 6.2832) * .5 + .5);   // bands drifting up
-    float a = clamp(vShade + vGlow * .5, 0., 1.) * scan * (1. - r * 1.2) * vA * uAlpha;
+    float scan = 1. - uScan * (.5 + .5 * uMotion) * smoothstep(.3, 1., sin((vY * uScanCount - uTime * 1.3) * 6.2832) * .5 + .5);   // bands drifting up
+    float a = clamp(vShade + vGlow * .5, 0., 1.) * scan * (1. - r * 1.2) * vA * uAlpha * uGain;
     gl_FragColor = vec4(uInk, clamp(a, 0., 1.));
   }`;
 
@@ -120,7 +130,9 @@ export class DepthHologram {
     this.material = new THREE.ShaderMaterial({
       vertexShader: VS, fragmentShader: FS, transparent: true, depthWrite: false, blending: THREE.NormalBlending,
       uniforms: { uDepth: U(blank), uSize: U(1), uRise: U(0), uTime: U(0), uGlitch: U(0), uThick: U(0.32),
-        uLensY: U(-frame.gap / frame.h), uMotion: U(reduceMotion ? 0 : 1), uTexel: U(1 / 512), uFormat: U(1), uAlpha: U(0), uInk: U(ink.clone()) },
+        uLensY: U(-frame.gap / frame.h), uMotion: U(reduceMotion ? 0 : 1), uTexel: U(1 / 512), uFormat: U(1), uDensity: U(1), uContrast: U(1), uBack: U(0.06),
+        uTouches: U(Array.from({ length: 8 }, () => new THREE.Vector4())), uTouchR: U(0.12), uTouchK: U(1),
+        uScan: U(0.5), uScanCount: U(46), uGain: U(1), uAlpha: U(0), uInk: U(ink.clone()) },
     });
     const pts = this.points = new THREE.Points(g, this.material);
     pts.frustumCulled = false;
@@ -203,10 +215,41 @@ export class DepthHologram {
     u.uTime.value = this.reduceMotion ? 0 : t;
     u.uGlitch.value = this.reduceMotion ? 0 : glitch;
     // a slow, uneven flicker on top of the projector's own (±12 %)
-    const slow = this.reduceMotion ? 1 : 1 - 0.12 * (0.5 + 0.5 * Math.sin(t * 7.3) * Math.sin(t * 2.1 + 1.3));
+    const slow = this.reduceMotion ? 1 : 1 - (this.flickerAmount ?? 0.12) * (0.5 + 0.5 * Math.sin(t * 7.3) * Math.sin(t * 2.1 + 1.3));
+    for (const v of u.uTouches.value) v.w *= Math.exp(-dt * (this.touchRecover ?? 1.5));   // the touch fades: dots drift back
     u.uAlpha.value = power * flicker * slow;
     u.uSize.value = size;
     this.points.visible = this.rise > 0.001 && power > 0.001 && !!(this.shown && this.shown.url);
+  }
+
+  /**
+   * The look, live: { dotSize, density 0..1, brightness, contrast, depth, scanlines 0..1, scanCount, flicker 0..1,
+   * back 0..1, color '#rrggbb' } and touch { on, radius, strength, recover }. Missing keys stay as they are.
+   */
+  setLook(look = {}, touch = {}) {
+    const u = this.material.uniforms;
+    if (look.density != null) u.uDensity.value = look.density;
+    if (look.brightness != null) u.uGain.value = look.brightness;
+    if (look.contrast != null) u.uContrast.value = look.contrast;
+    if (look.depth != null) u.uThick.value = look.depth;
+    if (look.scanlines != null) u.uScan.value = look.scanlines;
+    if (look.scanCount != null) u.uScanCount.value = look.scanCount;
+    if (look.back != null) u.uBack.value = look.back;
+    if (look.flicker != null) this.flickerAmount = look.flicker;
+    if (look.color) { const c = new THREE.Color(look.color); u.uInk.value.set(c.r, c.g, c.b); }
+    if (touch.on != null) this.touchOn = touch.on;
+    if (touch.radius != null) u.uTouchR.value = touch.radius;
+    if (touch.strength != null) u.uTouchK.value = touch.strength;
+    if (touch.recover != null) this.touchRecover = touch.recover;
+  }
+
+  /** The cursor at a point in the hologram's own space (x across, y up, 1 = its height): disturbs the dots there. */
+  touch(x, y) {
+    if (this.touchOn === false) return;
+    const T = this.material.uniforms.uTouches.value, last = T[this._touchI ?? 0];
+    if (last.w > 0.5 && Math.hypot(last.x - x, last.y - y) < 0.02) { last.w = 1; return; }   // still: keep one point alive
+    this._touchI = ((this._touchI ?? 0) + 1) % T.length;
+    T[this._touchI].set(x, y, 0, 1);
   }
 
   /** True while the dots stand in place (not draining or rising). */
