@@ -26,3 +26,25 @@ test('the Memory Projector has its own page, playing the memories', async () => 
     assert.deepEqual(t.errors, []);
   } finally { await t.close(); }
 });
+
+test('the projector page has the scene lab: ?lab or Shift+L, and its sliders change the scene', async () => {
+  const t = await openPage('/memory-projector/?lab', { waitFor: 'memory-projector[data-ready]', viewport: { width: 1440, height: 900 } });
+  try {
+    await t.page.waitForSelector('#scene-lab', { timeout: 10000 });
+    assert.equal(await t.page.isVisible('#scene-lab'), true);
+    await t.page.locator('#scene-lab input[data-path="camera.elevation"]').fill('60');
+    assert.equal(await t.page.evaluate(() => document.querySelector('memory-projector').getScene().camera.elevation), 60);
+    assert.equal(await t.page.locator('#scene-lab [data-path^="paper."]').count(), 0, 'no paper controls: this page has no paper');
+    await t.page.keyboard.press('Shift+L');
+    assert.equal(await t.page.isVisible('#scene-lab'), false);
+    assert.deepEqual(t.errors, []);
+  } finally { await t.close(); }
+  // without ?lab, Shift+L brings it up
+  const u = await openPage('/memory-projector/', { waitFor: 'memory-projector[data-ready]' });
+  try {
+    await u.page.waitForTimeout(500);
+    await u.page.keyboard.press('Shift+L');
+    await u.page.waitForSelector('#scene-lab', { state: 'visible', timeout: 10000 });
+    assert.deepEqual(u.errors, []);
+  } finally { await u.close(); }
+});

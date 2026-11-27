@@ -24,11 +24,11 @@
       --stage-x: .5; --stage-y: .6; --stage-scale: .17; }
     @media (min-aspect-ratio: 16/10) { memory-projector { --stage-x: .42; } }
     memory-projector:focus-visible { outline: 2px solid var(--ink); outline-offset: -8px; border-radius: 16px; }
-    header, footer { position: fixed; left: 32px; right: 32px; pointer-events: none; z-index: 1;
+    body > header, body > footer { position: fixed; left: 32px; right: 32px; pointer-events: none; z-index: 1;
       font-size: 11px; letter-spacing: .12em; text-transform: uppercase; color: var(--mute); }
-    header { top: 28px; }
-    header h1 { margin: 0; font-size: 11px; font-weight: 500; color: var(--ink); }
-    footer { bottom: 28px; display: flex; justify-content: space-between; align-items: end; gap: 24px; }
+    body > header { top: 28px; }
+    body > header h1 { margin: 0; font-size: 11px; font-weight: 500; color: var(--ink); }
+    body > footer { bottom: 28px; display: flex; justify-content: space-between; align-items: end; gap: 24px; }
     ol { display: flex; gap: 28px; list-style: none; margin: 0; padding: 0; }
     ol li span { color: var(--ink); margin-right: 8px; font-variant-numeric: tabular-nums; }
     kbd { font: inherit; }
@@ -37,8 +37,8 @@
       color: var(--ink); margin-top: 6px; text-transform: none; }
     .readout b.on { color: var(--beam); }
     @media (max-width: 640px) {
-      header, footer { left: 16px; right: 16px; }
-      footer { flex-direction: column; align-items: start; }
+      body > header, body > footer { left: 16px; right: 16px; }
+      body > footer { flex-direction: column; align-items: start; }
       ol { flex-direction: column; gap: 8px; }
       .readout { text-align: left; }
     }
@@ -65,9 +65,19 @@
     };
     el.addEventListener('memorychange', (e) => { title = e.detail.title; show(); });
     el.addEventListener('powerchange', show);
+    // the scene lab: ?lab in the URL, or Shift+L (it loads the first time; after that it toggles itself)
+    let lab = false;
+    const openLab = () => { if (lab) return; lab = true; import('./lab.js').catch((e) => { lab = false; console.error(e); }); };
+    customElements.whenDefined('memory-projector').then(() => {
+      const ready = () => { if (/[?&]lab\b/.test(location.search)) openLab(); };
+      el.hasAttribute('data-ready') ? ready() : new MutationObserver((_, o) => { if (el.hasAttribute('data-ready')) { o.disconnect(); ready(); } })
+        .observe(el, { attributes: true, attributeFilter: ['data-ready'] });
+    });
+    addEventListener('keydown', (e) => { if (e.shiftKey && e.key.toLowerCase() === 'l' && !e.metaKey && !e.ctrlKey && !lab) openLab(); });
     // the keys work anywhere on the page, not only when the projector has focus
     addEventListener('keydown', (e) => {
       if (e.metaKey || e.ctrlKey || e.altKey || document.activeElement === el || !el.togglePower) return;
+      if (e.shiftKey) return;
       const k = e.key.length === 1 ? e.key.toLowerCase() : e.key;
       const act = { p: 'togglePower', ArrowRight: 'next', ArrowLeft: 'back', s: 'shuffle', Enter: 'shuffle' }[k];
       if (!act) return;

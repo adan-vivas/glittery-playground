@@ -38,6 +38,8 @@ python3 -m http.server 4317
 ```
 
 Then open <http://localhost:4317/memory-projector/> for your memories, or <http://localhost:4317/memory-projector/demo/> for the synthetic demo.
+Add `?lab` to the address (or press Shift+L) for the scene lab: camera, light, room and materials, live, with fixtures you
+can save and copy out as JSON (`lab.js`).
 
 ## Use the component
 
