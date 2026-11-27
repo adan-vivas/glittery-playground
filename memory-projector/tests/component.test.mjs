@@ -11,7 +11,7 @@ const manifest = (body, status = 200) => [['**/demo/memories.json', (r) => r.ful
 const state = (page) => page.evaluate(() => ({ ...document.querySelector('memory-projector').state }));
 
 test('loads the demo memories, off, on the first one', async () => {
-  const t = await openPage('/memory-projector/index.html', { waitFor: READY });
+  const t = await openPage('/memory-projector/demo/', { waitFor: READY });
   try {
     await t.page.waitForFunction(() => document.querySelector('memory-projector').state.id === 'demo-dance');
     const s = await state(t.page);
@@ -22,7 +22,7 @@ test('loads the demo memories, off, on the first one', async () => {
 });
 
 test('next, back, shuffle and power, by API, keys and clicks', async () => {
-  const t = await openPage('/memory-projector/index.html', { waitFor: READY, routes: manifest(two) });
+  const t = await openPage('/memory-projector/demo/', { waitFor: READY, routes: manifest(two) });
   const { page } = t;
   try {
     await page.waitForFunction(() => document.querySelector('memory-projector').state.id === 'one');
@@ -51,7 +51,7 @@ test('next, back, shuffle and power, by API, keys and clicks', async () => {
 });
 
 test('a missing manifest leaves a working, empty projector', async () => {
-  const t = await openPage('/memory-projector/index.html', { waitFor: READY, routes: manifest('nope', 404) });
+  const t = await openPage('/memory-projector/demo/', { waitFor: READY, routes: manifest('nope', 404) });
   try {
     await t.page.evaluate(() => document.querySelector('memory-projector').togglePower());
     await t.page.waitForTimeout(400);
@@ -63,7 +63,7 @@ test('a missing manifest leaves a working, empty projector', async () => {
 });
 
 test('taking the projector off the page stops its video', async () => {
-  const t = await openPage('/memory-projector/index.html', { waitFor: READY });
+  const t = await openPage('/memory-projector/demo/', { waitFor: READY });
   try {
     await t.page.evaluate(() => document.querySelector('memory-projector').togglePower());
     await t.page.waitForFunction(() => !document.querySelector('memory-projector').depth.video.paused, null, { timeout: 15000 });

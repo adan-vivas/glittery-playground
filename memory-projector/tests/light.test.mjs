@@ -9,7 +9,7 @@ const probe = (page) => page.evaluate(() => {
 });
 
 test('a new memory develops slowly with the light on; next time it does not', async () => {
-  const t = await openPage('/memory-projector/index.html', { waitFor: READY });
+  const t = await openPage('/memory-projector/demo/', { waitFor: READY });
   try {
     await t.page.waitForFunction(() => document.querySelector('memory-projector').state.id === 'demo-dance');
     await t.page.evaluate(() => document.querySelector('memory-projector').togglePower());
@@ -26,7 +26,7 @@ test('a new memory develops slowly with the light on; next time it does not', as
     const storageState = await t.context.storageState();
     await t.close();
 
-    const u = await openPage('/memory-projector/index.html', { waitFor: READY, storageState });
+    const u = await openPage('/memory-projector/demo/', { waitFor: READY, storageState });
     try {
       await u.page.waitForFunction(() => document.querySelector('memory-projector').state.id === 'demo-dance');
       await u.page.evaluate(() => document.querySelector('memory-projector').togglePower());

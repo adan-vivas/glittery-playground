@@ -23,7 +23,7 @@ async function figureRect(page) {
 const powerOn = (page) => page.evaluate(() => document.querySelector('memory-projector').togglePower());
 
 test('a memory rises out of the lens as blue dots', async () => {
-  const t = await openPage('/memory-projector/index.html', { waitFor: READY });
+  const t = await openPage('/memory-projector/demo/', { waitFor: READY });
   try {
     await powerOn(t.page);
     await t.page.waitForTimeout(3000);
@@ -34,7 +34,7 @@ test('a memory rises out of the lens as blue dots', async () => {
 });
 
 test('an empty memory shows no figure', async () => {
-  const t = await openPage('/memory-projector/index.html', { waitFor: READY, routes: manifest([entry('e', EMPTY)]) });
+  const t = await openPage('/memory-projector/demo/', { waitFor: READY, routes: manifest([entry('e', EMPTY)]) });
   try {
     await powerOn(t.page);
     await t.page.waitForTimeout(3000);
@@ -45,7 +45,7 @@ test('an empty memory shows no figure', async () => {
 
 test('rapid presses settle on the last memory, risen', async () => {
   const list = [entry('a', DANCE), entry('b', EMPTY), entry('c', DANCE)];
-  const t = await openPage('/memory-projector/index.html', { waitFor: READY, routes: manifest(list) });
+  const t = await openPage('/memory-projector/demo/', { waitFor: READY, routes: manifest(list) });
   try {
     await powerOn(t.page);
     await t.page.waitForTimeout(1500);
@@ -68,7 +68,7 @@ test('when autoplay is refused it shows the first frame, and plays on the next p
       return window.__allowPlay ? play.call(this) : Promise.reject(new DOMException('blocked', 'NotAllowedError'));
     };
   };
-  const t = await openPage('/memory-projector/index.html', { waitFor: READY, initScript });
+  const t = await openPage('/memory-projector/demo/', { waitFor: READY, initScript });
   try {
     await powerOn(t.page);
     await t.page.waitForTimeout(3000);
@@ -82,7 +82,7 @@ test('when autoplay is refused it shows the first frame, and plays on the next p
 });
 
 test('a missing memory video warns once and shows nothing', async () => {
-  const t = await openPage('/memory-projector/index.html', { waitFor: READY, routes: manifest([entry('gone', 'gone.mp4')]) });
+  const t = await openPage('/memory-projector/demo/', { waitFor: READY, routes: manifest([entry('gone', 'gone.mp4')]) });
   try {
     await powerOn(t.page);
     const gone = () => t.warnings.filter((w) => /gone\.mp4/.test(w)).length;
@@ -105,7 +105,7 @@ test('a missing memory video warns once and shows nothing', async () => {
 });
 
 test('reduced motion: a still figure', async () => {
-  const t = await openPage('/memory-projector/index.html', { waitFor: READY, reducedMotion: 'reduce' });
+  const t = await openPage('/memory-projector/demo/', { waitFor: READY, reducedMotion: 'reduce' });
   try {
     await powerOn(t.page);
     await t.page.waitForTimeout(2500);
@@ -120,7 +120,7 @@ test('reduced motion: a still figure', async () => {
 });
 
 test('a format-2 file plays as format 2 even when the list doesn\'t say so', async () => {
-  const t = await openPage('/memory-projector/index.html', { waitFor: READY,
+  const t = await openPage('/memory-projector/demo/', { waitFor: READY,
     routes: manifest([entry('f2', '../tests/fixtures/format2.mp4')]) });   // no "format" in the entry
   try {
     await powerOn(t.page);

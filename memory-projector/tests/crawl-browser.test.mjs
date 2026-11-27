@@ -11,7 +11,7 @@ const inked = (page) => page.evaluate(() => {
 });
 
 test('the story crawls on the table and is read out', async () => {
-  const t = await openPage('/memory-projector/index.html', { waitFor: READY });
+  const t = await openPage('/memory-projector/demo/', { waitFor: READY });
   try {
     await t.page.evaluate(() => document.querySelector('memory-projector').togglePower());
     await t.page.waitForTimeout(3000);
@@ -24,7 +24,7 @@ test('the story crawls on the table and is read out', async () => {
 
 test('an empty story leaves the table dark', async () => {
   const list = [{ id: 'quiet', src: 'demo-dance.mp4', story: '', fps: 12, seconds: 7, aspect: 1 }];
-  const t = await openPage('/memory-projector/index.html', { waitFor: READY, routes: manifest(list) });
+  const t = await openPage('/memory-projector/demo/', { waitFor: READY, routes: manifest(list) });
   try {
     await t.page.evaluate(() => document.querySelector('memory-projector').togglePower());
     await t.page.waitForTimeout(2500);
@@ -34,7 +34,7 @@ test('an empty story leaves the table dark', async () => {
 });
 
 test('a fan of light runs from the front lens to the story, only while on', async () => {
-  const t = await openPage('/memory-projector/index.html', { waitFor: READY });
+  const t = await openPage('/memory-projector/demo/', { waitFor: READY });
   try {
     const fan = () => t.page.evaluate(() => { const el = document.querySelector('memory-projector'); return { a: el.projBeam.material.uniforms.uAlpha.value, visible: el.projBeam.visible }; });
     assert.ok((await fan()).a < 0.01);

@@ -18,8 +18,8 @@ lets you carry it in one hand.
 | `memory-projector.js` | The `<memory-projector>` web component (three.js) |
 | `holo-depth.js` | The hologram: plays a depth video as dots on the GPU |
 | `lib/` | Small pure modules: depth format, playlist, crawl layout, seen-memories store |
-| `index.html` | Demo page: the device on its own, with a synthetic demo memory |
-| `demo/` | The synthetic demo memory (a figure built from spheres; no real footage) |
+| `index.html` | The projector's own page (`/memory-projector/`): your memories, on a desk |
+| `demo/` | Demo page and the synthetic demo memory (a figure built from spheres; no real footage), used by the tests |
 | `memories/` | Your memories: `memories.json` and one depth-only `.mp4` per memory |
 | `engine/` | The engine page that turns a clip into a memory (see below) |
 | `assets/` | Web model (`memory-projector.glb`), baked contact shadow and ambient occlusion |
@@ -37,7 +37,7 @@ The pages load ES modules, so serve the repository rather than opening files dir
 python3 -m http.server 4317
 ```
 
-Then open <http://localhost:4317/memory-projector/>.
+Then open <http://localhost:4317/memory-projector/> for your memories, or <http://localhost:4317/memory-projector/demo/> for the synthetic demo.
 
 ## Use the component
 
